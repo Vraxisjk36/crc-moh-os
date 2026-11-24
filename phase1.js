@@ -1,32 +1,48 @@
-import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.89.0';
+import {createClient} from 'https://esm.sh/@supabase/supabase-js@2.89.0';
 const db=createClient('https://tkiwlptybfmaduulovbg.supabase.co','sb_publishable_k8PRKFpCTvh9qU5q4GOv2Q_coh9uu69',{auth:{storageKey:'crc-moh-phase1-auth'}});
 const $=id=>document.getElementById(id);
-const message=(text='')=>{$('message').textContent=text};
-function visible(id,yes){$(id).hidden=!yes}
-function result(r){if(r.error)throw Error(r.error.message);return r.data}
-async function action(fn){message();try{await fn()}catch(e){message(e.message||'Request failed')}}
-function fields(form){return Object.fromEntries(new FormData(form))}
-function page(id){for(const p of ['home','poll','notifications','activation'])visible(p,p===id)}
+const show=(id,on)=>{$(id).hidden=!on};
+const fields=form=>Object.fromEntries(new FormData(form));
+const result=r=>{if(r.error)throw new Error(r.error.message);return r.data};
+let mode='signin',verifyEmail='',groups=[],busy=false,recovery=false,profileId=null;
+const redirect=()=>location.origin+location.pathname;
+function message(text='',kind='info'){const n=$('message');n.textContent=text;n.dataset.kind=kind;n.hidden=!text;}
+async function action(fn){if(busy)return;busy=true;message();const buttons=[...document.querySelectorAll('button')].filter(b=>!b.disabled);buttons.forEach(b=>b.disabled=true);document.body.setAttribute('aria-busy','true');try{await fn()}catch(e){message(e.message||'Something went wrong. Please try again.','error')}finally{buttons.forEach(b=>b.disabled=false);document.body.removeAttribute('aria-busy');busy=false}}
+function screen(id){for(const v of ['welcome','auth','register','app'])show(v,v===id);window.scrollTo({top:0,behavior:'instant'});}
+function auth(next){mode=next;screen('auth');show('login',true);show('verify',false);show('reset',false);show('auth-switch',true);show('confirm-label',next==='signup');show('forgot',next==='signin');const f=$('login');f.elements.confirm.required=next==='signup';f.elements.password.autocomplete=next==='signup'?'new-password':'current-password';f.elements.password.minLength=next==='signup'?8:1;$('auth-title').textContent=next==='signup'?'Join the team.':'Welcome back.';$('auth-copy').textContent=next==='signup'?'Create your personal ministry account.':'Sign in to your ministry account.';$('auth-submit').textContent=next==='signup'?'Create account →':'Sign in →';document.querySelectorAll('[data-mode]').forEach(b=>b.setAttribute('aria-selected',String(b.dataset.mode===next)));}
+function verification(email){verifyEmail=email;screen('auth');show('login',false);show('reset',false);show('auth-switch',false);show('verify',true);$('auth-title').textContent='Check your email.';$('auth-copy').textContent='One more step before you join the team.';}
+function resetScreen(){screen('auth');show('login',false);show('verify',false);show('auth-switch',false);show('reset',true);$('auth-title').textContent='New password.';$('auth-copy').textContent='Choose a new password for your account.';}
+function step(n){screen('register');show('registration',n<3);show('step1',n===1);show('step2',n===2);show('step3',n===3);$('step-label').textContent='Step '+n+' of 3';$('step-bar').style.width=(n/3*100)+'%';}
+function filterGroups(){const f=fields($('registration'));const select=$('groups');select.replaceChildren(new Option('Select your group',''));for(const g of groups.filter(g=>g.division===f.division&&g.service===f.service&&g.training===(f.kind==='training')))select.add(new Option(g.training?g.code+' · Training':g.code+' · Group '+g.code.slice(3),g.code));if(select.options.length===2)select.selectedIndex=1;}
+function page(id){for(const p of ['home','poll','notifications','activation'])show(p,p===id)}
 function nextSunday(){const parts=new Intl.DateTimeFormat('en-CA',{timeZone:'Africa/Johannesburg',year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());const v=t=>parts.find(p=>p.type===t).value;const date=new Date(Date.UTC(+v('year'),+v('month')-1,+v('day')));date.setUTCDate(date.getUTCDate()+(7-date.getUTCDay())%7);return date.toISOString().slice(0,10)}
-async function refresh(){
-const {data:{session},error}=await db.auth.getSession();if(error)throw Error(error.message);
-visible('auth',!session);visible('register',false);visible('app',false);visible('exit-registration',false);if(!session)return;
-const profile=result(await db.from('member_profiles').select('user_id,first_name,last_name').eq('user_id',session.user.id).maybeSingle());
-if(!profile){const groups=result(await db.from('ministry_groups').select('code,division,service,training').order('code'));$('groups').replaceChildren(new Option('Choose your group',''));for(const g of groups)$('groups').add(new Option(g.code+' — '+(g.training?'Training':'Regular'),g.code));visible('register',true);visible('exit-registration',true);return}
-const memberships=result(await db.from('group_memberships').select('group_code').eq('user_id',session.user.id).is('ended_at',null));
-const roles=result(await db.from('leadership_roles').select('role,division,service,group_code,starts_at,ends_at,revoked_at').eq('user_id',session.user.id));
-const now=Date.now();const active=roles.filter(r=>!r.revoked_at&&Date.parse(r.starts_at)<=now&&(!r.ends_at||Date.parse(r.ends_at)>now));
-$('greeting').textContent='Welcome, '+profile.first_name;
-$('membership').textContent='Home group: '+(memberships[0]?.group_code||'No current group');
-$('roles').textContent='Active leadership roles: '+(active.map(r=>r.role.replaceAll('_',' ')+(r.group_code?' · '+r.group_code:'')).join(', ')||'None');
-$('poll-form').elements.sunday.value=nextSunday();visible('app',true);page('home');
-}
-async function notifications(){const rows=result(await db.from('member_notifications').select('id,title,body,created_at,read_at').order('created_at',{ascending:false}).limit(100));const root=$('notification-list');root.replaceChildren();if(!rows.length)root.textContent='No notifications yet.';for(const n of rows){const article=document.createElement('article');const h=document.createElement('h3');h.textContent=n.title;const p=document.createElement('p');p.textContent=n.body;article.append(h,p);if(!n.read_at){const b=document.createElement('button');b.textContent='Mark as read';b.onclick=()=>action(async()=>{result(await db.rpc('mark_notification_read',{p_id:n.id}));await notifications()});article.append(b)}root.append(article)}}
-$('login').onsubmit=e=>{e.preventDefault();action(async()=>{const f=fields(e.target);result(await db.auth.signInWithPassword({email:f.email,password:f.password}));await refresh()})};
-$('signup').onclick=()=>action(async()=>{if(!$('login').reportValidity())return;const f=fields($('login'));const r=result(await db.auth.signUp({email:f.email,password:f.password}));if(r.session)await refresh();else message('Check your email to verify your account, then sign in.')});
-$('registration').onsubmit=e=>{e.preventDefault();action(async()=>{const f=fields(e.target);result(await db.rpc('register_member',{p_first:f.first,p_last:f.last,p_group:f.group,p_phone:f.phone,p_birth:f.birth||null,p_year:f.year?Number(f.year):null}));await refresh()})};
+async function refresh(){if(recovery){resetScreen();return}const session=result(await db.auth.getSession()).session;if(!session){profileId=null;screen('welcome');return}profileId=session.user.id;
+const profile=result(await db.from('member_profiles').select('user_id,first_name,last_name').eq('user_id',profileId).maybeSingle());
+if(!profile){groups=result(await db.from('ministry_groups').select('code,division,service,training').order('code'));filterGroups();step(1);return}
+const memberships=result(await db.from('group_memberships').select('group_code').eq('user_id',profileId).is('ended_at',null));const roles=result(await db.from('leadership_roles').select('role,division,service,group_code,starts_at,ends_at,revoked_at').eq('user_id',profileId));const now=Date.now();const active=roles.filter(r=>!r.revoked_at&&Date.parse(r.starts_at)<=now&&(!r.ends_at||Date.parse(r.ends_at)>now));$('greeting').textContent='Welcome, '+profile.first_name+'.';$('membership').textContent='Home group: '+(memberships[0]?.group_code||'No current group');$('roles').textContent='Leadership: '+(active.map(r=>r.role.replaceAll('_',' ')+(r.group_code?' · '+r.group_code:'')).join(', ')||'Member');$('poll-form').elements.sunday.value=nextSunday();screen('app');page('home')}
+async function notifications(){const rows=result(await db.from('member_notifications').select('id,title,body,created_at,read_at').order('created_at',{ascending:false}).limit(100));const root=$('notification-list');root.replaceChildren();if(!rows.length)root.textContent='No notifications yet.';for(const n of rows){const a=document.createElement('article'),h=document.createElement('h3'),p=document.createElement('p');h.textContent=n.title;p.textContent=n.body;a.append(h,p);if(!n.read_at){const b=document.createElement('button');b.className='outline';b.textContent='Mark as read';b.onclick=()=>action(async()=>{result(await db.rpc('mark_notification_read',{p_id:n.id}));await notifications()});a.append(b)}root.append(a)}}
+document.querySelectorAll('[data-auth]').forEach(b=>b.onclick=()=>{message();auth(b.dataset.auth)});
+document.querySelectorAll('[data-mode]').forEach(b=>b.onclick=()=>{message();auth(b.dataset.mode)});
+$('auth-back').onclick=()=>action(async()=>{if(recovery){await db.auth.signOut();recovery=false}screen('welcome')});
+$('brand').onclick=e=>{e.preventDefault();if(!profileId&&!recovery)screen('welcome')};
+document.querySelectorAll('[data-peek]').forEach(b=>b.onclick=()=>{const i=b.previousElementSibling;i.type=i.type==='password'?'text':'password';b.textContent=i.type==='password'?'Show':'Hide';b.setAttribute('aria-pressed',String(i.type==='text'))});
+$('login').onsubmit=e=>{e.preventDefault();action(async()=>{const f=fields(e.target);if(mode==='signup'){if(f.password!==f.confirm)throw Error('Passwords do not match.');const r=result(await db.auth.signUp({email:f.email,password:f.password,options:{emailRedirectTo:redirect()}}));if(r.session)await refresh();else verification(f.email)}else{result(await db.auth.signInWithPassword({email:f.email,password:f.password}));await refresh()}})};
+$('forgot').onclick=()=>{const i=$('login').elements.email;if(!i.reportValidity())return;action(async()=>{result(await db.auth.resetPasswordForEmail(i.value,{redirectTo:redirect()}));message('If an account exists, a password reset link will be sent. Check your inbox.')})};
+$('verified').onclick=()=>auth('signin');
+$('resend').onclick=()=>action(async()=>{result(await db.auth.resend({type:'signup',email:verifyEmail,options:{emailRedirectTo:redirect()}}));message('Verification email requested.')});
+$('reset').onsubmit=e=>{e.preventDefault();action(async()=>{const f=fields(e.target);if(f.password!==f.confirm)throw Error('Passwords do not match.');result(await db.auth.updateUser({password:f.password}));recovery=false;await refresh();message('Password updated.')})};
+$('next-step').onclick=()=>{for(const i of $('step1').querySelectorAll('input'))if(!i.reportValidity())return;step(2);filterGroups()};
+$('prev-step').onclick=()=>step(1);
+$('registration').addEventListener('change',e=>{if(['kind','division','service'].includes(e.target.name))filterGroups()});
+$('registration').elements.year.max=new Date().getFullYear();
+$('registration').elements.birth.max=new Date().toISOString().slice(0,10);
+$('registration').onsubmit=e=>{e.preventDefault();action(async()=>{const f=fields(e.target);result(await db.rpc('register_member',{p_first:f.first,p_last:f.last,p_group:f.group,p_phone:f.phone,p_birth:f.birth||null,p_year:f.year?Number(f.year):null}));if(f.privateBirthday){const r=await db.from('member_profiles').update({birthday_opt_out:true}).eq('user_id',profileId);if(r.error)message('Profile created, but birthday privacy could not be saved. Contact the administrator.','error')}step(3)})};
+$('onboard-activation').onsubmit=e=>{e.preventDefault();action(async()=>{result(await db.rpc('redeem_leadership_code',{p_code:fields(e.target).code.trim()}));e.target.reset();await refresh();message('Leadership role activated. Welcome to MoH OS.')})};
+$('finish-onboarding').onclick=()=>action(refresh);
 $('poll-form').onsubmit=e=>{e.preventDefault();action(async()=>{const f=fields(e.target);result(await db.rpc('submit_sunday_poll',{p_sunday:f.sunday,p_choice:f.choice,p_reason:f.reason||null}));message('Availability saved.')})};
-$('activation-form').onsubmit=e=>{e.preventDefault();action(async()=>{const f=fields(e.target);result(await db.rpc('redeem_leadership_code',{p_code:f.code.trim()}));e.target.reset();await refresh();message('Leadership role activated.')})};
-for(const b of $('nav').querySelectorAll('[data-page]'))b.onclick=()=>action(async()=>{page(b.dataset.page);if(b.dataset.page==='notifications')await notifications()});
-for(const id of ['logout','exit-registration'])$(id).onclick=()=>action(async()=>{result(await db.auth.signOut());await refresh()});
+$('activation-form').onsubmit=e=>{e.preventDefault();action(async()=>{result(await db.rpc('redeem_leadership_code',{p_code:fields(e.target).code.trim()}));e.target.reset();await refresh();message('Leadership role activated.')})};
+$('nav').querySelectorAll('[data-page]').forEach(b=>b.onclick=()=>action(async()=>{page(b.dataset.page);if(b.dataset.page==='notifications')await notifications()}));
+for(const id of ['logout','exit-registration'])$(id).onclick=()=>action(async()=>{result(await db.auth.signOut());$('registration').reset();$('login').reset();recovery=false;await refresh()});
+if('IntersectionObserver'in window&&!matchMedia('(prefers-reduced-motion: reduce)').matches){const observer=new IntersectionObserver(entries=>{for(const e of entries)if(e.isIntersecting){e.target.classList.remove('is-waiting');observer.unobserve(e.target)}},{threshold:.1});document.querySelectorAll('.reveal').forEach(n=>{n.classList.add('is-waiting');observer.observe(n)})}
+db.auth.onAuthStateChange(event=>{if(event==='PASSWORD_RECOVERY'){recovery=true;setTimeout(resetScreen,0)}});
 action(refresh);
