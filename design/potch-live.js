@@ -276,7 +276,7 @@
       const modal = openModal('Account settings');
       modal.append(elem('p', 'muted', 'Signed in as ' + account.email));
       modal.append(button('Send password reset email', async () => {
-        try { check(await client.auth.resetPasswordForEmail(account.email)); say('Password reset email requested.'); }
+        try { check(await client.auth.resetPasswordForEmail(account.email, { redirectTo: location.origin + location.pathname + '?live=1' })); say('Password reset email requested.'); }
         catch (err) { say(err.message || 'Could not request reset'); }
       }, 'outline wide'));
       modal.append(button('Sign out', async () => {
@@ -347,7 +347,7 @@
     try {
       if (mode === 'signup') {
         if (password !== f.elements.confirm.value) return say('Passwords do not match.');
-        const result = check(await client.auth.signUp({ email, password }));
+        const result = check(await client.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname + '?live=1' } }));
         if (result?.session) await enter(result.user);
         else inform('Account created. Confirm the email sent by Supabase, then sign in. Ministry access still requires administrator approval.', false);
       } else {
@@ -370,7 +370,7 @@
     byId('forgot').onclick = async () => {
       const email = String(login.elements.email.value || '').trim();
       if (!email) return say('Enter your email address first.');
-      try { check(await client.auth.resetPasswordForEmail(email)); say('If your account exists, a password reset email will arrive.'); }
+      try { check(await client.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname + '?live=1' })); say('If your account exists, a password reset email will arrive.'); }
       catch (err) { say(err.message || 'Password reset unavailable'); }
     };
     try {
