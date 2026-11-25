@@ -275,7 +275,10 @@
     } catch (err) { say(err.message || 'Unable to sign in'); }
     finally { busy = false; byId('auth-submit').disabled = false; }
   }
+  let started = false;
   async function start() {
+    if (started) return;
+    started = true;
     const login = byId('login');
     login.elements.email.value = ''; login.elements.password.value = ''; login.elements.confirm.value = '';
     login.addEventListener('submit', submitCredentials, true);
