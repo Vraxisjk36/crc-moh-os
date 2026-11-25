@@ -44,7 +44,7 @@
     if (!active) return false;
     const perm = routePermissions();
     // Only workflows implemented against real tenant data are enabled here.
-    if (['home', 'academy', 'poll', 'profile'].includes(p)) return true;
+    if (['home', 'academy', 'poll', 'profile', 'notifications'].includes(p)) return true;
     if (p === 'reports' && perm.has('reports.read')) return false; // pending real reports UI
     return false;
   };
@@ -204,6 +204,90 @@
     } catch (err) { say('Availability not fully saved: ' + (err.message || 'Please retry')); }
     finally { busy = false; }
   }
+
+  async function liveNotifications() {
+    const root = root57('notifications');
+    strip57(root, 'MINISTRY ALERTS', 'Notifications', 'Messages assigned to your authenticated account');
+    try {
+      const rows = check(await client.from('moh16_notifications')
+        .select('id,title,body,kind,created_at,read_at')
+        .eq('church_id', CHURCH).eq('user_id', account.id)
+        .order('created_at', { ascending: false }).limit(50)) || [];
+      if (!rows.length) {
+        root.append(elem('p', 'muted', 'No ministry notifications yet.'));
+        return;
+      }
+      rows.forEach(n => {
+        const mark = n.read_at ? null : button('Mark read', async () => {
+          try {
+            check(await client.rpc('moh16_read_notification', { p_church: CHURCH, p_id: n.id }));
+            await liveNotifications();
+          } catch (err) { say(err.message || 'Could not mark notification as read'); }
+        }, 'outline');
+        line57(root, n.title || 'Ministry update', (n.body || '') + ' · ' + new Date(n.created_at).toLocaleDateString('en-ZA') + (n.read_at ? ' · Read' : ' · Unread'), mark);
+      });
+    } catch (err) { root.append(elem('p', 'muted', 'Notifications could not be loaded: ' + err.message)); }
+  }
+  function safeProfile() {
+    const root = byId('profile');
+    if (!root) return;
+    const cardID = root.querySelector('.pass-top span:nth-child(2)');
+    if (cardID) cardID.textContent = 'AUTHENTICATED MEMBER';
+    const previewQR = root.querySelector('.pass-qr');
+    if (previewQR) previewQR.hidden = true;
+    for (const id of ['served-total', 'streak-total', 'years-serving']) {
+      if (byId(id)) byId(id).textContent = '—';
+    }
+    byId('profile-timeline')?.replaceChildren();
+    byId('edit-profile').onclick = () => {
+      const modal = openModal('Edit display name');
+      const label = document.createElement('label');
+      label.textContent = 'Full name';
+      const input = document.createElement('input');
+      input.required = true; input.maxLength = 120;
+      input.value = name + (last ? ' ' + last : '');
+      label.append(input);
+      const form = document.createElement('form');
+      const submit = document.createElement('button');
+      submit.className = 'primary wide'; submit.textContent = 'Save name'; submit.type = 'submit';
+      form.append(label, submit);
+      form.onsubmit = async e => {
+        e.preventDefault();
+        if (busy) return;
+        const v = input.value.trim();
+        if (v.length < 2) return say('Enter your full name.');
+        busy = true; submit.disabled = true;
+        try {
+          check(await client.rpc('moh16_save_identity', { p_name: v }));
+          const parsed = parseName(v);
+          name = parsed.first; last = parsed.last;
+          summary.display_name = v;
+          const self = roster.find(m => m.id === 'self');
+          if (self) self.name = v;
+          closeModal(); renderProfile(); safeProfile();
+          byId('member-name').textContent = v;
+          say('Name saved in Supabase.');
+        } catch (err) { say(err.message || 'Could not update your name'); }
+        finally { busy = false; submit.disabled = false; }
+      };
+      modal.append(form);
+    };
+    byId('edit-account').onclick = () => {
+      const modal = openModal('Account settings');
+      modal.append(elem('p', 'muted', 'Signed in as ' + account.email));
+      modal.append(button('Send password reset email', async () => {
+        try { check(await client.auth.resetPasswordForEmail(account.email)); say('Password reset email requested.'); }
+        catch (err) { say(err.message || 'Could not request reset'); }
+      }, 'outline wide'));
+      modal.append(button('Sign out', async () => {
+        await client.auth.signOut();
+        active = false; account = null;
+        closeModal(); location.reload();
+      }, 'outline wide'));
+    };
+    if (byId('show-achievement')) byId('show-achievement').onclick = () => page('academy');
+  }
+
   async function enter(user) {
     if (!user) { active = false; screen('welcome'); return; }
     account = user;
@@ -225,7 +309,7 @@
     person.phone = ''; person.birth = ''; person.year = ''; person.photo = '';
     state.vote = null;
     demoActorId = 'self';
-    const roleLabel = summary.administrator ? 'Ministry Leader' : (summary.roles?.[0]?.label || (group.endsWith('IT') ? 'Trainee' : 'Member'));
+    const roleLabel = summary.roles?.[0]?.label || (group.endsWith('IT') ? 'Trainee' : 'Member');
     roster.splice(0, roster.length, { id: 'self', name: displayed, group, role: roleLabel, vote: null });
     const selectRole = byId('role-switch');
     selectRole.replaceChildren(new Option(roleLabel, roleLabel)); selectRole.value = roleLabel;
@@ -235,7 +319,6 @@
     await Promise.all([loadCourses(), loadVote(sunday())]);
     dashboard();
     sanitizeDashboard();
-    const oldAcademy = renderAcademy57;
     renderAcademy57 = liveAcademy;
     const originalPage = page;
     page = function (p) {
@@ -243,6 +326,8 @@
       originalPage(p);
       if (p === 'home') sanitizeDashboard();
       if (p === 'academy') liveAcademy();
+      if (p === 'notifications') liveNotifications();
+      if (p === 'profile') safeProfile();
     };
     const nav = document.querySelectorAll('#nav [data-page],.bottom-tabs [data-page]');
     nav.forEach(b => { if (!allowed(b.dataset.page)) b.title = 'Live integration pending'; });
@@ -251,10 +336,7 @@
       e.preventDefault(); e.stopImmediatePropagation();
       await client.auth.signOut(); active = false; account = null; screen('welcome');
     }, true));
-    const profile = byId('profile');
-    if (profile) profile.querySelectorAll('form').forEach(f => f.addEventListener('submit', e => {
-      e.preventDefault(); e.stopImmediatePropagation(); say('Profile updates are not enabled in live staging yet.');
-    }, true));
+    safeProfile();
     say('Connected to your CRC Potchefstroom account.');
   }
   async function submitCredentials(e) {
@@ -292,7 +374,9 @@
       catch (err) { say(err.message || 'Password reset unavailable'); }
     };
     try {
-      const mod = await import('https://esm.sh/@supabase/supabase-js@2.110.0');
+      let mod;
+      try { mod = await import('https://esm.sh/@supabase/supabase-js@2.110.0'); }
+      catch (_) { mod = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.0/+esm'); }
       client = mod.createClient(URL, "sb_publishable_k8PRKFpCTvh9qU5q4GOv2Q_coh9uu69", {
         auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
       });
