@@ -346,7 +346,41 @@
     const memberships = check(await client.from('moh16_memberships').select('church_id,access_level,active').eq('church_id', CHURCH).eq('user_id', user.id).eq('active', true).limit(1));
     if (!memberships?.length) {
       active = false;
-      inform('Signed in, but CRC Potchefstroom membership has not been approved. A church administrator must grant access before this account can use live ministry records.', true);
+      byId('verify').replaceChildren();
+      inform('Choose your trainee group to open the Academy.', true);
+      const panel = byId('verify');
+      const form = document.createElement('form');
+      const label = document.createElement('label');
+      label.textContent = 'Trainee group';
+      const select = document.createElement('select');
+      select.required = true;
+      select.add(new Option('Choose a group', ''));
+      for (const [code, title] of [
+        ['amuit', 'AM Usher'], ['amhit', 'AM Hostess'],
+        ['pmuit', 'PM Usher'], ['pmhit', 'PM Hostess']
+      ]) select.add(new Option(title, code));
+      label.append(select);
+      const submit = document.createElement('button');
+      submit.type = 'submit';
+      submit.className = 'primary wide';
+      submit.textContent = 'Continue';
+      const status = document.createElement('p');
+      status.setAttribute('role', 'status');
+      form.append(label, submit, status);
+      panel.prepend(form);
+      form.addEventListener('submit', async event => {
+        event.preventDefault();
+        submit.disabled = true;
+        try {
+          check(await client.rpc('moh16_self_register_potch', { p_group: select.value }));
+          await enter(user);
+          page('academy');
+          form.remove();
+        } catch (err) {
+          status.textContent = err.message || 'Could not complete registration.';
+          submit.disabled = false;
+        }
+      });
       return;
     }
     summary = check(await client.rpc('moh16_dashboard', { p_church: CHURCH }));
@@ -401,7 +435,7 @@
         if (password !== f.elements.confirm.value) return say('Passwords do not match.');
         const result = check(await client.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname + '?live=1' } }));
         if (result?.session) await enter(result.user);
-        else inform('Account created. Confirm the email sent by Supabase, then sign in. Ministry access still requires administrator approval.', false);
+        else inform('Account created. Confirm your email, then sign in to choose your trainee group and open the Academy.', false);
       } else {
         const result = check(await client.auth.signInWithPassword({ email, password }));
         await enter(result.user);
