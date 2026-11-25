@@ -31,6 +31,58 @@
       byId('verify').append(btn);
     }
   };
+  const recoveryRedirect = () => location.origin + location.pathname + '?live=1&recovery=1';
+  let recoveryFormShown = false;
+  function showPasswordRecovery() {
+    if (recoveryFormShown) return;
+    recoveryFormShown = true;
+    byId('verify').replaceChildren();
+    inform('Choose a new password for your ministry account.', false);
+    const form = document.createElement('form');
+    const passwordInput = label => {
+      const field = document.createElement('label');
+      field.textContent = label;
+      const input = document.createElement('input');
+      input.type = 'password';
+      input.autocomplete = 'new-password';
+      input.required = true;
+      field.append(input);
+      form.append(field);
+      return input;
+    };
+    const password = passwordInput('New password');
+    const confirm = passwordInput('Confirm new password');
+    const submit = document.createElement('button');
+    submit.type = 'submit';
+    submit.className = 'primary wide';
+    submit.textContent = 'Save new password';
+    const status = document.createElement('p');
+    status.setAttribute('role', 'status');
+    form.append(submit, status);
+    byId('verify').append(form);
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      if (password.value !== confirm.value) {
+        status.textContent = 'Passwords do not match.';
+        return;
+      }
+      submit.disabled = true;
+      try {
+        check(await client.auth.updateUser({ password: password.value }));
+        form.remove();
+        inform('Password updated. Continue to your ministry account.', false);
+        const proceed = document.createElement('button');
+        proceed.type = 'button';
+        proceed.className = 'primary wide';
+        proceed.textContent = 'Continue';
+        proceed.onclick = () => location.replace(location.pathname + '?live=1');
+        byId('verify').append(proceed);
+      } catch (err) {
+        status.textContent = err.message || 'Could not update your password.';
+        submit.disabled = false;
+      }
+    });
+  }
   const parseName = input => {
     const n = String(input || '').trim().replace(/\s+/g, ' ');
     const words = n.split(' ');
@@ -276,7 +328,7 @@
       const modal = openModal('Account settings');
       modal.append(elem('p', 'muted', 'Signed in as ' + account.email));
       modal.append(button('Send password reset email', async () => {
-        try { check(await client.auth.resetPasswordForEmail(account.email, { redirectTo: location.origin + location.pathname + '?live=1' })); say('Password reset email requested.'); }
+        try { check(await client.auth.resetPasswordForEmail(account.email, { redirectTo: recoveryRedirect() })); say('Password reset email requested.'); }
         catch (err) { say(err.message || 'Could not request reset'); }
       }, 'outline wide'));
       modal.append(button('Sign out', async () => {
@@ -370,7 +422,7 @@
     byId('forgot').onclick = async () => {
       const email = String(login.elements.email.value || '').trim();
       if (!email) return say('Enter your email address first.');
-      try { check(await client.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname + '?live=1' })); say('If your account exists, a password reset email will arrive.'); }
+      try { check(await client.auth.resetPasswordForEmail(email, { redirectTo: recoveryRedirect() })); say('If your account exists, a password reset email will arrive.'); }
       catch (err) { say(err.message || 'Password reset unavailable'); }
     };
     try {
@@ -381,7 +433,29 @@
         auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
       });
       delete window.__MOH_PUBLISHABLE_KEY__;
+      const recoveryRequested = new URLSearchParams(location.search).get('recovery') === '1' ||
+        new URLSearchParams(location.hash.slice(1)).get('type') === 'recovery';
+      let recoveryEvent = false;
+      client.auth.onAuthStateChange(event => {
+        if (event !== 'PASSWORD_RECOVERY') return;
+        recoveryEvent = true;
+        showPasswordRecovery();
+      });
+      if (recoveryRequested) {
+        await client.auth.getSession();
+        if (!recoveryEvent) {
+          inform('This password reset link is invalid or expired.', false);
+          const retry = document.createElement('button');
+          retry.type = 'button';
+          retry.className = 'outline wide';
+          retry.textContent = 'Return to sign-in';
+          retry.onclick = () => location.replace(location.pathname + '?live=1');
+          byId('verify').append(retry);
+        }
+        return;
+      }
       const result = await client.auth.getUser();
+      if (recoveryEvent) return;
       if (result.data?.user) await enter(result.data.user);
       else screen('welcome');
     } catch (err) { inform('Live connection unavailable: ' + (err.message || 'Check the site configuration.'), false); }
