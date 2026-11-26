@@ -44,6 +44,39 @@ main:has(#welcome:not([hidden])){width:min(100%,1440px);padding-top:0}
 .welcome-end{background:#7e1b3a}
 @media(max-width:650px){.identity{grid-template-columns:1fr}.identity-photo{height:285px;min-height:0}}
 @media(prefers-reduced-motion:reduce){.ticker div,.word-mask>span{animation:none!important}}
+
+main:has(#app:not([hidden])){width:min(100% - 1.5rem,1100px);padding-top:.5rem}
+body:has(#app:not([hidden])) > header,body:has(#app:not([hidden])) > footer{display:none}
+body:has(#auth:not([hidden])) > footer{display:none}
+.work-top{display:flex;align-items:center;gap:.75rem;padding:.45rem 0 .8rem;border-bottom:1px solid #715166;margin-bottom:1rem}
+.work-top span{font-size:1.05rem;font-weight:800}.alert-button{margin-left:auto;display:grid;place-content:center}
+.hamburger{display:grid;align-content:center;gap:4px;min-width:44px}.hamburger i{width:19px;height:2px;background:currentColor}
+.sidebar{position:fixed;inset:0 auto 0 0;z-index:12;width:min(86vw,315px);padding:1rem;background:#211821;overflow:auto;border-right:1px solid #765169;box-shadow:10px 0 30px #09060a99;animation:app-drawer .25s ease-out}
+@keyframes app-drawer{from{transform:translateX(-100%)}}
+.nav-scrim{position:fixed;inset:0;z-index:11;width:100%;height:100%;border:0;border-radius:0;background:#110a15b5}
+.side-top{display:flex;justify-content:space-between;align-items:center}
+.menu-banner,.entry-banner,.member-welcome,.academy-hero{position:relative;overflow:hidden;background:linear-gradient(119deg,#771330,#351329 75%);border:1px solid #9d4967;border-radius:14px;padding:1rem;margin:.7rem 0 1rem;isolation:isolate}
+.menu-banner:after,.entry-banner:after,.academy-hero:after{content:'';position:absolute;z-index:-1;top:-50%;height:200%;width:22%;right:10%;transform:skew(-23deg);background:#9c3253;opacity:.53}
+.menu-banner>*{display:block}.menu-banner strong{font-size:2.8rem;line-height:.82;margin:.4rem 0}.menu-banner span,.entry-banner span{font-size:.75rem;letter-spacing:.12em}
+#nav{display:grid;gap:.37rem}#nav button{text-align:left}
+#auth.entry{max-width:none;padding:0;overflow:hidden;display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.entry-art{background:linear-gradient(#200c1d22,#230d1cea),url('./ministry-red-army.webp') center/cover;min-height:460px;padding:2rem;display:flex;flex-direction:column;justify-content:flex-end}
+.entry-art h2{font-size:clamp(2.2rem,5vw,4.6rem);line-height:.93;letter-spacing:-.06em}
+.entry-body{padding:clamp(1rem,4vw,2rem);min-width:0}
+.entry-banner{min-height:120px;margin-top:0}.entry-banner>*{display:block}.entry-banner strong{font-size:clamp(2.8rem,8vw,5rem);line-height:1;letter-spacing:-.065em}
+.trainee-options{display:grid;grid-template-columns:1fr 1fr;gap:.55rem;border:0;padding:0}
+.trainee-options legend{grid-column:1/-1;margin-bottom:.45rem;font-weight:700}
+.trainee-options label{background:#332637;border:1px solid #936b7e;border-radius:10px;padding:.55rem .7rem}
+.trainee-options label:has(:checked){background:#821f40;border-color:#ed8eac}
+.academy-hero{padding:clamp(1rem,4vw,2rem)}.academy-hero h1{margin:.25rem 0 .55rem}
+.academy-hero progress{max-width:400px;display:block;margin:.65rem 0;accent-color:#ff9fbd}
+.academy-modules{display:grid;gap:.45rem;margin:1rem 0}
+.academy-modules .module57{margin:0;padding:.7rem;text-align:left;min-height:66px}
+.academy-modules .num57{color:#ffaaca;font-weight:800;align-self:center}
+.academy-modules .module57>div:nth-child(2){flex:1}.academy-modules .module57 small{font-size:.86rem}
+.academy-modules .module57:disabled{opacity:.72}.academy-next{border-color:#df7292}
+@media(max-width:690px){#auth.entry{grid-template-columns:1fr}.entry-art{display:none}}
+@media(prefers-reduced-motion:reduce){.sidebar{animation:none}}
 </style>
 <script src="./potch-live.js" defer></script>
 </head>
@@ -69,7 +102,8 @@ main:has(#welcome:not([hidden])){width:min(100%,1440px);padding-top:0}
  <section class="network-intro"><p class="eyebrow">CRC MINISTRY OF HELPS</p><h2>One purpose.<br><em>Every church.</em></h2><p>Start with CRC Potchefstroom. Confirm your serving availability, train through the Academy, and check your ministry alerts.</p></section>
  <section class="welcome-end"><h2>Ready to serve?</h2><button type="button" class="primary" data-auth="signup">Create profile</button></section>
 </section>
-<section id="auth" hidden>
+<section id="auth" class="entry" hidden><div class="entry-art"><p>THE RED ARMY</p><h2>Excellence<br>in service.</h2></div>
+<div class="entry-body"><div class="entry-banner" aria-hidden="true"><span>CRC / RED ARMY</span><strong id="entry-word">SERVE.</strong><small>YOUR PLACE IN THE TEAM</small></div>
  <button type="button" id="back-home">Home</button>
  <div id="auth-switch" class="actions"><button type="button" data-auth="signin">Sign in</button><button type="button" data-auth="signup">Create account</button></div>
  <h1 id="auth-title">Your account</h1><p id="auth-copy"></p>
@@ -81,15 +115,21 @@ main:has(#welcome:not([hidden])){width:min(100%,1440px);padding-top:0}
   <button id="forgot" type="button">Forgot password?</button>
  </form>
  <div id="verify" hidden><span id="verified" hidden></span></div>
+ </div>
 </section>
-<section id="app" hidden>
+<section id="app" class="app-shell" hidden>
+ <div class="work-top"><button class="hamburger" id="open-nav" type="button" aria-label="Open menu" aria-controls="sidebar" aria-expanded="false"><i></i><i></i><i></i></button><span id="work-title">Dashboard</span><button type="button" class="alert-button" data-page="notifications" aria-label="Alerts"><svg aria-hidden="true" viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M6 9a6 6 0 0 1 12 0v4l2 3H4l2-3V9Zm4 10h4"/></svg></button></div>
+ <button type="button" class="nav-scrim" id="nav-scrim" aria-label="Close menu" hidden></button>
+ <aside class="sidebar" id="sidebar" hidden>
+ <div class="side-top"><strong>MOH / CRC</strong><button type="button" id="close-nav" aria-label="Close menu">×</button></div>
+ <div class="menu-banner"><small>ONE TEAM.</small><strong>RED<br>ARMY.</strong><span>CRC POTCHEFSTROOM</span></div>
  <nav id="nav" aria-label="Member workspace">
   <button type="button" data-page="home">Home</button><button type="button" data-page="academy">Academy</button>
   <button type="button" data-page="poll">Sunday availability</button><button type="button" data-page="notifications">Alerts</button>
   <button type="button" data-page="profile">Profile</button><button type="button" id="sign-out">Sign out</button>
- </nav>
- <section id="home">
-  <h1 id="greeting"></h1>
+ </nav></aside>
+ <div class="work-content"><section id="home">
+  <div class="member-welcome"><p class="eyebrow">CRC POTCHEFSTROOM</p><h1 id="greeting"></h1></div>
   <article class="panel"><h2>Upcoming service</h2><p id="service-status"></p></article>
   <article class="panel"><h2>Sunday availability</h2><p id="availability-status"></p><button type="button" data-page="poll">Open availability</button></article>
  </section>
@@ -110,6 +150,7 @@ main:has(#welcome:not([hidden])){width:min(100%,1440px);padding-top:0}
  </section>
  <section id="notifications" hidden><div id="notifications-root"></div></section>
  <section id="profile" hidden><h1 id="member-name"></h1><p id="member-group"></p><p id="member-role"></p><div class="actions"><button type="button" id="edit-profile">Edit display name</button><button type="button" id="edit-account">Account settings</button></div></section>
+ </div>
 </section>
 <dialog id="details" aria-labelledby="details-title"><button type="button" id="close-details">Close</button><h2 id="details-title"></h2><div id="details-body"></div></dialog>
 </main>

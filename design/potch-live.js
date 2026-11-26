@@ -133,12 +133,31 @@
     byId('confirm-label').hidden = !signup;
     byId('auth-switch').hidden = false;
     byId('verify').hidden = true;
+    byId('entry-word').textContent = signup ? 'BELONG.' : 'SERVE.';
     byId('auth-title').textContent = signup ? 'Create your account' : 'Sign in';
     byId('auth-copy').textContent = 'CRC Potchefstroom';
     byId('auth-submit').textContent = signup ? 'Create account' : 'Sign in';
     screen('auth');
   }
-  function msg(text) { byId('status').textContent = text; }
+  let statusTimer;
+  function msg(text) {
+    const status = byId('status');
+    status.textContent = text;
+    clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => { status.textContent = ''; }, 3600);
+  }
+  let previousFocus;
+  function setMenu(open, restoreFocus = true) {
+    const sidebar = byId('sidebar');
+    if (sidebar.hidden === !open) return;
+    if (open) previousFocus = document.activeElement;
+    sidebar.hidden = !open;
+    byId('nav-scrim').hidden = !open;
+    byId('open-nav').setAttribute('aria-expanded', String(open));
+    document.body.style.overflow = open ? 'hidden' : '';
+    if (open) byId('close-nav').focus();
+    else if (restoreFocus) previousFocus?.focus();
+  }
   function openModal(title) {
     const modal = byId('details');
     byId('details-title').textContent = title;
@@ -182,6 +201,9 @@
   }
   function page(id) {
     if (!active || !pages.includes(id)) return;
+    setMenu(false, false);
+    byId('work-title').textContent = {home:'Dashboard',academy:'Academy',poll:'Sunday availability',notifications:'Alerts',profile:'Profile'}[id];
+    window.scrollTo(0,0);
     pages.forEach(key => { byId(key).hidden = key !== id; });
     document.querySelectorAll('#nav [data-page]').forEach(control=>{
       control.setAttribute('aria-current', control.dataset.page === id ? 'page' : 'false');
@@ -268,18 +290,42 @@
   }
   function liveAcademy() {
     const root = root57('academy');
-    const passed = units.filter(completed).length;
-    strip57(root, 'RED ARMY ACADEMY · LIVE', passed + ' / ' + units.length, 'Official published course · Supabase assessment records');
-    progress57(root, units.length ? passed / units.length * 100 : 0);
-    if (!course) { root.append(elem('p', 'muted', 'No published course is assigned to this member yet.')); return; }
-    root.append(elem('p', 'muted', course.title + ' · Pass mark ' + course.pass_mark + '%'));
-    units.forEach((u, i) => {
-      const row = button('', () => lesson(u), 'line57 module57');
-      const title = elem('div');
-      title.append(elem('b', '', u.title), elem('small', '', completed(u) ? 'Passed · verified in Supabase' : (u.is_final ? 'Final assessment' : 'Read lesson · knowledge check')));
-      row.append(elem('div', 'num57', String(i + 1).padStart(2, '0')), title, elem('span', completed(u) ? 'done57' : '', completed(u) ? '✓' : '›'));
-      root.append(row);
+    const banner = elem('header','academy-hero');
+    banner.style.display = 'block';
+    banner.style.width = '100%';
+    banner.append(elem('p','eyebrow','RED ARMY ACADEMY'),elem('h1','',course?.title || 'Your training'));
+    root.append(banner);
+    if (!course) {
+      banner.append(elem('p','muted','No published course is assigned to your account yet.'));
+      return;
+    }
+    const assessed = units.filter(unit=>unit.question_count>0);
+    const passed = assessed.filter(completed).length;
+    banner.append(elem('p','',''+passed+' of '+assessed.length+' assessments passed · Pass mark '+course.pass_mark+'%'));
+    progress57(banner, assessed.length ? passed / assessed.length * 100 : 0);
+    const next = assessed.find(unit=>!unit.is_final&&!completed(unit));
+    const final = assessed.find(unit=>unit.is_final&&!completed(unit));
+    const current = next || final;
+    if (current) {
+      const line = elem('article','panel academy-next');
+      line.append(elem('p','eyebrow',next?'NEXT LESSON':'FINAL ASSESSMENT'),elem('h2','',current.title),
+        button(next?'Continue training':'Open final assessment',()=>lesson(current),'primary'));
+      root.append(line);
+    }
+    root.append(elem('h2','','Course modules'));
+    const modules = elem('div','academy-modules');
+    units.forEach((unit,index)=>{
+      const passedUnit=completed(unit);
+      const locked=unit.is_final&&!!next&&!passedUnit;
+      const item=button('',()=>lesson(unit),'line57 module57');
+      const title=elem('div');
+      title.append(elem('b','',unit.title),elem('small','',passedUnit?'Passed':locked?'Complete the knowledge checks to unlock':unit.is_final?'Final assessment':unit.question_count?'Lesson and knowledge check':'Lesson'));
+      item.disabled=locked;
+      item.append(elem('div','num57',String(index+1).padStart(2,'0')),title);
+      if (passedUnit) item.append(elem('span','done57','✓'));
+      modules.append(item);
     });
+    root.append(modules);
   }
   const sunday = date => {
     const d = date ? new Date(date + 'T12:00:00') : new Date();
@@ -417,29 +463,36 @@
       inform('Choose your trainee group to open the Academy.', true);
       const panel = byId('verify');
       const form = document.createElement('form');
-      const label = document.createElement('label');
-      label.textContent = 'Trainee group';
-      const select = document.createElement('select');
-      select.required = true;
-      select.add(new Option('Choose a group', ''));
-      for (const [code, title] of [
-        ['amuit', 'AM Usher'], ['amhit', 'AM Hostess'],
-        ['pmuit', 'PM Usher'], ['pmhit', 'PM Hostess']
-      ]) select.add(new Option(title, code));
-      label.append(select);
+      byId('entry-word').textContent = 'BELONG.';
+      byId('auth-title').textContent = 'Find your place.';
+      const options = elem('fieldset','trainee-options');
+      options.append(elem('legend','','Choose your trainee group'));
+      for (const [code,title] of [
+        ['amuit','AM Usher'],['amhit','AM Hostess'],
+        ['pmuit','PM Usher'],['pmhit','PM Hostess']
+      ]) {
+        const option = elem('input');
+        option.type = 'radio';
+        option.name = 'trainee-group';
+        option.value = code;
+        option.required = true;
+        const label = elem('label');
+        label.append(option,document.createTextNode(title));
+        options.append(label);
+      }
       const submit = document.createElement('button');
       submit.type = 'submit';
       submit.className = 'primary wide';
       submit.textContent = 'Continue';
       const status = document.createElement('p');
       status.setAttribute('role', 'status');
-      form.append(label, submit, status);
+      form.append(options, submit, status);
       panel.prepend(form);
       form.addEventListener('submit', async event => {
         event.preventDefault();
         submit.disabled = true;
         try {
-          check(await client.rpc('moh16_self_register_potch', { p_group: select.value }));
+          check(await client.rpc('moh16_self_register_potch', { p_group: new FormData(form).get('trainee-group') }));
           await enter(user);
           page('academy');
           form.remove();
@@ -467,7 +520,6 @@
     screen('app');
     page('home');
     safeProfile();
-    say('Connected to your CRC Potchefstroom account.');
   }
   async function submitCredentials(e) {
     e.preventDefault(); e.stopImmediatePropagation();
@@ -497,6 +549,12 @@
     document.querySelectorAll('[data-auth]').forEach(control=>{ control.onclick=()=>auth(control.dataset.auth); });
     document.querySelectorAll('[data-page]').forEach(control=>{ control.onclick=()=>page(control.dataset.page); });
     byId('sign-out').onclick = signOut;
+    byId('open-nav').onclick = () => setMenu(true);
+    byId('close-nav').onclick = () => setMenu(false);
+    byId('nav-scrim').onclick = () => setMenu(false);
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && !byId('sidebar').hidden) setMenu(false);
+    });
     byId('back-home').onclick = () => screen(active ? 'app' : 'welcome');
     byId('close-details').onclick = closeModal;
     byId('poll-form').addEventListener('submit', saveVote);
