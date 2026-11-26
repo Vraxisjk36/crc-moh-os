@@ -1,15 +1,10 @@
-/* CRC Potchefstroom live-data adapter.
-   Staging only: ?live=1. The approved 4 MB master and its demo mode remain intact.
-   Security decisions always remain in Supabase (RLS / RPC), never in this UI. */
 (function () {
   'use strict';
-  if (new URLSearchParams(location.search).get('live') !== '1') return;
   const welcomePhoto = document.querySelector('#welcome .hero-photo');
   if (welcomePhoto) {
     const style = document.createElement('style');
     style.textContent = "\n#welcome .hero-photo .moh-photo-lockup{position:absolute;inset:0;z-index:2;display:grid;place-content:center;justify-items:center;gap:.35rem;background:#270c18;color:#fff;pointer-events:none;visibility:hidden}\n#welcome .hero-photo .moh-intro-playing{visibility:visible;animation:moh-intro-curtain .65s 1.28s both}\n.moh-thread{width:min(78vw,620px,90cqw);max-width:100%;overflow:visible}\n#welcome .hero-photo{container-type:inline-size}\n.moh-thread path{fill:none;stroke:#ff6d88;stroke-width:4;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1}\n.moh-intro-playing .moh-thread path{animation:moh-intro-write 1.28s cubic-bezier(.36,.1,.5,1) both}\n.moh-photo-lockup small{margin-top:.85rem;color:#fff;font-size:clamp(.7rem,2vw,1rem);font-weight:800;letter-spacing:.24em;text-transform:uppercase}\n.moh-intro-playing small{animation:moh-intro-caption .4s .9s both}\n#welcome .word-mask>span{animation-delay:1.14s}\n#welcome .word-mask:nth-child(2)>span{animation-delay:1.26s}\n#moh-replay{position:absolute;z-index:4;right:1rem;bottom:1rem;background:#270c18;color:white;border:1px solid #ffb6c4;border-radius:100px;min-height:44px;padding:.62rem 1rem;cursor:pointer}\n#moh-replay:focus-visible{outline:2px solid white;outline-offset:3px}\n@keyframes moh-intro-write{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}\n@keyframes moh-intro-caption{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}\n@keyframes moh-intro-curtain{from{clip-path:inset(0);opacity:1}to{clip-path:inset(0 0 100% 0);opacity:0;visibility:hidden}}\n@media(prefers-reduced-motion:reduce){#welcome .hero-photo .moh-photo-lockup,#moh-replay{display:none}#welcome .word-mask>span,#welcome .word-mask:nth-child(2)>span{animation:none!important;transform:none;opacity:1}}\n";
     document.head.append(style);
-    document.getElementById('scene')?.classList.remove('active', 'opening');
     welcomePhoto.insertAdjacentHTML('afterbegin', "<div class=\"moh-photo-lockup moh-intro-playing\" role=\"img\" aria-label=\"MOH · Ministry of Helps\">\n<svg aria-hidden=\"true\" class=\"moh-thread\" viewBox=\"0 0 340 115\">\n<path pathLength=\"1\" d=\"M4 87 C21 108 37 45 17 49 C-2 53 28 94 47 90\nL47 21 Q48 12 55 23 L80 67 L104 23 Q112 12 112 23 L112 88\nQ117 98 129 91 L151 72 C131 43 148 14 172 15 C202 14 211 38 206 62\nC202 93 171 106 151 72 Q163 109 226 90 L226 23 Q226 12 230 19\nL230 94 L230 58 L280 58 L280 20 L280 91 C291 108 316 72 335 79\"/>\n</svg><small aria-hidden=\"true\">Ministry of Helps</small></div><button id=\"moh-replay\" type=\"button\">Replay intro</button>");
     (() => {
       const intro = document.querySelector('#welcome .moh-photo-lockup');
@@ -28,7 +23,6 @@
   let client, account, member, summary, configuration, course, units = [], attempts = [], active = false;
   let busy = false;
   document.documentElement.dataset.mohLive = 'true';
-  try { window.Date = NativeDemoDate; } catch (_) {}
   const byId = id => document.getElementById(id);
   const say = text => { try { msg(text); } catch (_) { console.warn(text); } };
   const check = result => { if (result.error) throw result.error; return result.data; };
@@ -37,7 +31,8 @@
     byId('login').hidden = true;
     byId('auth-switch').hidden = true;
     byId('verify').hidden = false;
-    byId('verified').hidden = true;
+    const previous = byId('verified');
+    if (previous) previous.hidden = true;
     byId('auth-title').textContent = 'CRC Potchefstroom';
     byId('auth-copy').textContent = 'Your ministry account';
     let label = byId('moh-live-status');
@@ -46,7 +41,7 @@
     if (allowSignOut) {
       const btn = document.createElement('button');
       btn.className = 'outline wide'; btn.textContent = 'Sign out';
-      btn.onclick = async () => { await client.auth.signOut(); account = null; active = false; auth('signin'); };
+      btn.onclick = async () => { await signOut(); };
       byId('verify').append(btn);
     }
   };
@@ -107,48 +102,100 @@
     const words = n.split(' ');
     return { first: words.shift() || 'Member', last: words.join(' ') };
   };
-  const routePermissions = () => {
-    const grants = (summary.roles || []).flatMap(r => Array.isArray(r.permissions) ? r.permissions : []);
-    return new Set(grants);
+  let name = '', last = '', mode = 'signin';
+  const state = {vote:null};
+  const pages = ['home', 'academy', 'poll', 'profile', 'notifications'];
+  const elem = (tag, cls, text) => {
+    const node = document.createElement(tag);
+    if (cls) node.className = cls;
+    if (text != null) node.textContent = text;
+    return node;
   };
-  const allowed = p => {
-    if (!active) return false;
-    const perm = routePermissions();
-    // Only workflows implemented against real tenant data are enabled here.
-    if (['home', 'academy', 'poll', 'profile', 'notifications'].includes(p)) return true;
-    if (p === 'reports' && perm.has('reports.read')) return false; // pending real reports UI
-    return false;
+  const button = (text, action, cls) => {
+    const control = elem('button', cls, text);
+    control.type = 'button';
+    control.onclick = action;
+    return control;
   };
+  function screen(id) {
+    ['welcome','auth','app'].forEach(key => { byId(key).hidden = key !== id; });
+    byId('jump').hidden = id === 'app';
+  }
+  function auth(nextMode) {
+    mode = nextMode;
+    const signup = mode === 'signup';
+    const form = byId('login');
+    form.hidden = false;
+    form.elements.password.value = '';
+    form.elements.confirm.value = '';
+    form.elements.password.autocomplete = signup ? 'new-password' : 'current-password';
+    form.elements.confirm.required = signup;
+    byId('confirm-label').hidden = !signup;
+    byId('auth-switch').hidden = false;
+    byId('verify').hidden = true;
+    byId('auth-title').textContent = signup ? 'Create your account' : 'Sign in';
+    byId('auth-copy').textContent = 'CRC Potchefstroom';
+    byId('auth-submit').textContent = signup ? 'Create account' : 'Sign in';
+    screen('auth');
+  }
+  function msg(text) { byId('status').textContent = text; }
+  function openModal(title) {
+    const modal = byId('details');
+    byId('details-title').textContent = title;
+    const body = byId('details-body');
+    body.replaceChildren();
+    if (!modal.open) modal.showModal();
+    return body;
+  }
+  function closeModal() { byId('details').close(); }
+  function root57(id) {
+    const root = byId(id + '-root');
+    root.replaceChildren();
+    return root;
+  }
+  function strip57(root, label, title, note) {
+    root.append(elem('p','muted',label),elem('h1','',title),elem('p','muted',note));
+  }
+  function line57(root, title, text, control) {
+    const row = elem('article','panel');
+    row.append(elem('h2','',title),elem('p','',text));
+    if (control) row.append(control);
+    root.append(row);
+  }
+  function progress57(root, value) {
+    const progress = elem('progress');
+    progress.max = 100;
+    progress.value = value;
+    progress.setAttribute('aria-label','Assessment progress');
+    root.append(progress);
+  }
   function sanitizeDashboard() {
-    const root = byId('home');
-    if (!root) return;
-    const upcoming = (summary.upcoming || [])[0];
-    const assignment = byId('assignment-area');
-    if (assignment) assignment.textContent = 'Awaiting verified leadership allocation';
-    const art = root.querySelector('.assignment-art');
-    if (art) {
-      const service = art.querySelector('span');
-      const time = art.querySelector('b');
-      if (service) service.textContent = upcoming?.code?.toUpperCase() || '—';
-      if (time) time.textContent = String(upcoming?.arrival || '—').slice(0, 5);
-    }
-    const history = root.querySelector('.history-summary');
-    if (history) {
-      history.querySelectorAll('b').forEach(el => el.textContent = '—');
-      const note = history.querySelector('.history-note');
-      if (note) note.textContent = 'Serving history awaits verified attendance records.';
-    }
-    const chart = byId('week-chart'), detail = byId('week-detail');
-    if (chart) chart.replaceChildren();
-    if (detail) detail.replaceChildren();
-    let status = byId('moh-live-banner');
-    if (!status) {
-      status = document.createElement('p');
-      status.id = 'moh-live-banner';
-      status.className = 'muted';
-      root.querySelector('.dash-date')?.append(status);
-    }
-    status.textContent = 'Connected to CRC Potchefstroom · Live account · Draft campus';
+    byId('greeting').textContent = 'Welcome, ' + name + '.';
+    byId('member-name').textContent = name + (last ? ' ' + last : '');
+    byId('member-group').textContent = member.group_code?.toUpperCase() || 'No serving group assigned';
+    byId('member-role').textContent = summary.roles?.map(role=>role.label).filter(Boolean).join(' · ') || 'Member';
+    byId('availability-status').textContent = state.vote || 'No availability response recorded for this Sunday.';
+    const upcoming = summary.upcoming?.[0];
+    byId('service-status').textContent = upcoming
+      ? [upcoming.service_date, upcoming.code?.toUpperCase(), upcoming.arrival?.slice(0,5)].filter(Boolean).join(' · ')
+      : 'No upcoming service is assigned to your team.';
+  }
+  function page(id) {
+    if (!active || !pages.includes(id)) return;
+    pages.forEach(key => { byId(key).hidden = key !== id; });
+    document.querySelectorAll('#nav [data-page]').forEach(control=>{
+      control.setAttribute('aria-current', control.dataset.page === id ? 'page' : 'false');
+    });
+    if (id === 'home' || id === 'profile') sanitizeDashboard();
+    if (id === 'academy') liveAcademy();
+    if (id === 'notifications') liveNotifications();
+  }
+  async function signOut() {
+    try {
+      check(await client.auth.signOut());
+      closeModal();
+      location.replace(location.pathname);
+    } catch (err) { say(err.message || 'Could not sign out'); }
   }
   async function loadCourses() {
     if (!member?.team_code) { course = null; units = []; attempts = []; return; }
@@ -211,7 +258,7 @@
           const result = check(await client.rpc('moh16_submit_assessment', { p_church: CHURCH, p_attempt: res.attempt_id, p_answers: answers }));
           closeModal();
           say((result.passed ? 'Passed' : 'Not passed') + ' · ' + result.score + '%');
-          await loadCourses(); renderAcademy57();
+          await loadCourses(); liveAcademy();
         } catch (err) { say(err.message || 'Assessment not saved'); }
         finally { busy = false; submit.disabled = false; }
       };
@@ -245,7 +292,10 @@
     const am = rows?.find(x => x.service_code === 'am')?.choice === 'available';
     const pm = rows?.find(x => x.service_code === 'pm')?.choice === 'available';
     state.vote = am && pm ? 'Both services' : am ? 'AM service' : pm ? 'PM service' : rows?.length ? 'Not serving' : null;
-    if (state.vote) document.querySelectorAll('#poll-form [name=choice]').forEach(x => { x.checked = x.value === state.vote; });
+    document.querySelectorAll('#poll-form [name=choice]').forEach(x => { x.checked = x.value === state.vote; });
+    byId('reason-label').hidden = state.vote !== 'Not serving';
+    byId('poll-form').elements.reason.value = state.vote === 'Not serving' ? rows?.find(row=>row.reason)?.reason || '' : '';
+    byId('poll-form').elements.reason.required = state.vote === 'Not serving';
   }
   async function saveVote(e) {
     e.preventDefault(); e.stopImmediatePropagation();
@@ -258,6 +308,7 @@
     if (new Date(date + 'T12:00:00').getDay() !== 0) return say('Select a Sunday.');
     const services = (configuration.services || []).map(x => x.code);
     const actions = ['am', 'pm'].filter(x => services.includes(x));
+    if (!actions.length) return say('No Sunday services are configured.');
     busy = true;
     try {
       for (const code of actions) {
@@ -314,14 +365,6 @@
   function safeProfile() {
     const root = byId('profile');
     if (!root) return;
-    const cardID = root.querySelector('.pass-top span:nth-child(2)');
-    if (cardID) cardID.textContent = 'AUTHENTICATED MEMBER';
-    const previewQR = root.querySelector('.pass-qr');
-    if (previewQR) previewQR.hidden = true;
-    for (const id of ['served-total', 'streak-total', 'years-serving']) {
-      if (byId(id)) byId(id).textContent = '—';
-    }
-    byId('profile-timeline')?.replaceChildren();
     byId('edit-profile').onclick = () => {
       const modal = openModal('Edit display name');
       const label = document.createElement('label');
@@ -345,10 +388,7 @@
           const parsed = parseName(v);
           name = parsed.first; last = parsed.last;
           summary.display_name = v;
-          const self = roster.find(m => m.id === 'self');
-          if (self) self.name = v;
-          closeModal(); renderProfile(); safeProfile();
-          byId('member-name').textContent = v;
+          closeModal(); sanitizeDashboard();
           say('Name saved in Supabase.');
         } catch (err) { say(err.message || 'Could not update your name'); }
         finally { busy = false; submit.disabled = false; }
@@ -362,11 +402,7 @@
         try { check(await client.auth.resetPasswordForEmail(account.email, { redirectTo: recoveryRedirect() })); say('Password reset email requested.'); }
         catch (err) { say(err.message || 'Could not request reset'); }
       }, 'outline wide'));
-      modal.append(button('Sign out', async () => {
-        await client.auth.signOut();
-        active = false; account = null;
-        closeModal(); location.reload();
-      }, 'outline wide'));
+      modal.append(button('Sign out', signOut, 'outline wide'));
     };
     if (byId('show-achievement')) byId('show-achievement').onclick = () => page('academy');
   }
@@ -422,37 +458,14 @@
     const parsed = parseName(displayed);
     member = summary.placement || {};
     name = parsed.first; last = parsed.last;
-    group = member.group_code ? member.group_code.toUpperCase() : 'Unplaced';
-    person.phone = ''; person.birth = ''; person.year = ''; person.photo = '';
     state.vote = null;
-    demoActorId = 'self';
-    const roleLabel = summary.roles?.[0]?.label || (group.endsWith('IT') ? 'Trainee' : 'Member');
-    roster.splice(0, roster.length, { id: 'self', name: displayed, group, role: roleLabel, vote: null });
-    const selectRole = byId('role-switch');
-    selectRole.replaceChildren(new Option(roleLabel, roleLabel)); selectRole.value = roleLabel;
-    selectRole.closest('label').hidden = true;
-    if (window.demoControls) window.demoControls.hidden = true;
+    const date = sunday();
+    byId('poll-form').elements.sunday.value = date;
+    byId('poll-date').textContent = date;
+    await Promise.all([loadCourses(), loadVote(date)]);
     active = true;
-    await Promise.all([loadCourses(), loadVote(sunday())]);
-    dashboard();
-    sanitizeDashboard();
-    renderAcademy57 = liveAcademy;
-    const originalPage = page;
-    page = function (p) {
-      if (!allowed(p)) { say('This ministry workspace is not yet connected in live staging.'); return; }
-      originalPage(p);
-      if (p === 'home') sanitizeDashboard();
-      if (p === 'academy') liveAcademy();
-      if (p === 'notifications') liveNotifications();
-      if (p === 'profile') safeProfile();
-    };
-    const nav = document.querySelectorAll('#nav [data-page],.bottom-tabs [data-page]');
-    nav.forEach(b => { if (!allowed(b.dataset.page)) b.title = 'Live integration pending'; });
-    byId('poll-form').addEventListener('submit', saveVote, true);
-    byId('app').querySelectorAll('[data-home]').forEach(b => b.addEventListener('click', async e => {
-      e.preventDefault(); e.stopImmediatePropagation();
-      await client.auth.signOut(); active = false; account = null; screen('welcome');
-    }, true));
+    screen('app');
+    page('home');
     safeProfile();
     say('Connected to your CRC Potchefstroom account.');
   }
@@ -481,6 +494,17 @@
     const login = byId('login');
     login.elements.email.value = ''; login.elements.password.value = ''; login.elements.confirm.value = '';
     login.addEventListener('submit', submitCredentials, true);
+    document.querySelectorAll('[data-auth]').forEach(control=>{ control.onclick=()=>auth(control.dataset.auth); });
+    document.querySelectorAll('[data-page]').forEach(control=>{ control.onclick=()=>page(control.dataset.page); });
+    byId('sign-out').onclick = signOut;
+    byId('back-home').onclick = () => screen(active ? 'app' : 'welcome');
+    byId('close-details').onclick = closeModal;
+    byId('poll-form').addEventListener('submit', saveVote);
+    byId('poll-form').addEventListener('change',()=>{
+      const unavailable=byId('poll-form').elements.choice.value === 'Not serving';
+      byId('reason-label').hidden=!unavailable;
+      byId('poll-form').elements.reason.required=unavailable;
+    });
     byId('jump').onclick = () => auth('signin');
     byId('jump').textContent = 'Sign in ↗';
     byId('jump').setAttribute('aria-label', 'Sign in to the live ministry workspace');
@@ -497,8 +521,7 @@
       client = mod.createClient(URL, "sb_publishable_k8PRKFpCTvh9qU5q4GOv2Q_coh9uu69", {
         auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
       });
-      delete window.__MOH_PUBLISHABLE_KEY__;
-      const recoveryRequested = new URLSearchParams(location.search).get('recovery') === '1' ||
+        const recoveryRequested = new URLSearchParams(location.search).get('recovery') === '1' ||
         new URLSearchParams(location.hash.slice(1)).get('type') === 'recovery';
       let recoveryEvent = false;
       client.auth.onAuthStateChange(event => {

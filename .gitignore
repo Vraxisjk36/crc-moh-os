@@ -1,8 +1,0 @@
-# Secrets — never commit these
-.env
-.env.local
-.env.*.local
-
-node_modules/
-.DS_Store
-*.log
