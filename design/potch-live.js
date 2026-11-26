@@ -260,6 +260,18 @@
   async function liveNotifications() {
     const root = root57('notifications');
     strip57(root, 'MINISTRY ALERTS', 'Notifications', 'Messages assigned to your authenticated account');
+    const test = button('Send me a test alert', async () => {
+      test.disabled = true;
+      try {
+        const created = check(await client.rpc('moh16_create_potch_test_notification'));
+        say(created ? 'Test alert added to your inbox.' : 'You already created a test alert today.');
+        await liveNotifications();
+      } catch (err) {
+        say(err.message || 'Could not create a test alert');
+        test.disabled = false;
+      }
+    }, 'outline');
+    root.append(test);
     try {
       const rows = check(await client.from('moh16_notifications')
         .select('id,title,body,kind,created_at,read_at')
