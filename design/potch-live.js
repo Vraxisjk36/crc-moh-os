@@ -4,6 +4,25 @@
 (function () {
   'use strict';
   if (new URLSearchParams(location.search).get('live') !== '1') return;
+  const welcomePhoto = document.querySelector('#welcome .hero-photo');
+  if (welcomePhoto) {
+    const style = document.createElement('style');
+    style.textContent = "\n#welcome .hero-photo .moh-photo-lockup{position:absolute;inset:0;z-index:2;display:grid;place-content:center;justify-items:center;gap:.35rem;background:#270c18;color:#fff;pointer-events:none;visibility:hidden}\n#welcome .hero-photo .moh-intro-playing{visibility:visible;animation:moh-intro-curtain .65s 1.28s both}\n.moh-thread{width:min(78vw,620px,90cqw);max-width:100%;overflow:visible}\n#welcome .hero-photo{container-type:inline-size}\n.moh-thread path{fill:none;stroke:#ff6d88;stroke-width:4;stroke-linecap:round;stroke-linejoin:round;stroke-dasharray:1}\n.moh-intro-playing .moh-thread path{animation:moh-intro-write 1.28s cubic-bezier(.36,.1,.5,1) both}\n.moh-photo-lockup small{margin-top:.85rem;color:#fff;font-size:clamp(.7rem,2vw,1rem);font-weight:800;letter-spacing:.24em;text-transform:uppercase}\n.moh-intro-playing small{animation:moh-intro-caption .4s .9s both}\n#welcome .word-mask>span{animation-delay:1.14s}\n#welcome .word-mask:nth-child(2)>span{animation-delay:1.26s}\n#moh-replay{position:absolute;z-index:4;right:1rem;bottom:1rem;background:#270c18;color:white;border:1px solid #ffb6c4;border-radius:100px;min-height:44px;padding:.62rem 1rem;cursor:pointer}\n#moh-replay:focus-visible{outline:2px solid white;outline-offset:3px}\n@keyframes moh-intro-write{from{stroke-dashoffset:1}to{stroke-dashoffset:0}}\n@keyframes moh-intro-caption{from{opacity:0;transform:translateY(9px)}to{opacity:1;transform:none}}\n@keyframes moh-intro-curtain{from{clip-path:inset(0);opacity:1}to{clip-path:inset(0 0 100% 0);opacity:0;visibility:hidden}}\n@media(prefers-reduced-motion:reduce){#welcome .hero-photo .moh-photo-lockup,#moh-replay{display:none}#welcome .word-mask>span,#welcome .word-mask:nth-child(2)>span{animation:none!important;transform:none;opacity:1}}\n";
+    document.head.append(style);
+    document.getElementById('scene')?.classList.remove('active', 'opening');
+    welcomePhoto.insertAdjacentHTML('afterbegin', "<div class=\"moh-photo-lockup moh-intro-playing\" role=\"img\" aria-label=\"MOH · Ministry of Helps\">\n<svg aria-hidden=\"true\" class=\"moh-thread\" viewBox=\"0 0 340 115\">\n<path pathLength=\"1\" d=\"M4 87 C21 108 37 45 17 49 C-2 53 28 94 47 90\nL47 21 Q48 12 55 23 L80 67 L104 23 Q112 12 112 23 L112 88\nQ117 98 129 91 L151 72 C131 43 148 14 172 15 C202 14 211 38 206 62\nC202 93 171 106 151 72 Q163 109 226 90 L226 23 Q226 12 230 19\nL230 94 L230 58 L280 58 L280 20 L280 91 C291 108 316 72 335 79\"/>\n</svg><small aria-hidden=\"true\">Ministry of Helps</small></div><button id=\"moh-replay\" type=\"button\">Replay intro</button>");
+    (() => {
+      const intro = document.querySelector('#welcome .moh-photo-lockup');
+      const words = [...document.querySelectorAll('#welcome .word-mask>span')];
+      document.getElementById('moh-replay').addEventListener('click', () => {
+        intro.classList.remove('moh-intro-playing');
+        words.forEach(word => { word.style.animation = 'none'; });
+        void intro.offsetWidth;
+        intro.classList.add('moh-intro-playing');
+        words.forEach(word => { word.style.removeProperty('animation'); });
+      });
+    })();
+  }
   const CHURCH = 'debd20d7-ab61-490e-ab73-1d37b55cb389';
   const URL = 'https://tkiwlptybfmaduulovbg.supabase.co';
   let client, account, member, summary, configuration, course, units = [], attempts = [], active = false;
