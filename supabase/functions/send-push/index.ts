@@ -1,79 +1,59 @@
 import webpush from "npm:web-push@3.6.7";
-import { createClient } from "npm:@supabase/supabase-js@2";
+import { createClient } from "npm:@supabase/supabase-js@2.110.0";
 
-const supabase = createClient(
-  Deno.env.get("SUPABASE_URL")!,
-  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-);
+const database = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+  auth: { persistSession: false, autoRefreshToken: false },
+});
 
-webpush.setVapidDetails(
-  "mailto:you@crcpotch.co.za",
-  Deno.env.get("VAPID_PUBLIC_KEY")!,
-  Deno.env.get("VAPID_PRIVATE_KEY")!,
-);
+type Job = {
+  id: number;
+  attempts: number;
+  endpoint: string;
+  notification_id: string;
+  p256dh: string;
+  auth: string;
+};
 
-// Resolve an announcement's audience to a list of user_ids.
-async function audienceUserIds(a: any): Promise<number[]> {
-  let q = supabase.from("user_info").select("user_id");
-  if (a.audience_type === "division") q = q.eq("division", a.audience_value);
-  else if (a.audience_type === "service") q = q.eq("primary_service", a.audience_value);
-  else if (a.audience_type === "group") q = q.eq("group_id", a.audience_value);
-  else if (a.audience_type === "area_teams")
-    q = q.in("group_id", String(a.audience_value || "").split(","));
-  // 'all' → no filter
+Deno.serve(async request => {
+  if (request.method !== "POST") return new Response(null, { status: 405 });
+  const token = request.headers.get("x-moh-push-token");
+  if (!token || !/^[a-f0-9]{64}$/.test(token)) return new Response(null, { status: 401 });
 
-  const { data, error } = await q;
-  if (error) throw error;
-  return (data ?? []).map((r: any) => r.user_id).filter((id) => id !== a.created_by);
-}
+  const { data, error } = await database.rpc("moh16_claim_web_push", { p_token: token });
+  if (error) return new Response(null, { status: error.code === "42501" ? 401 : 503 });
 
-Deno.serve(async (req) => {
-  try {
-    const body = await req.json();
-    const a = body.record ?? body;           // webhook sends { record: {...} }
-    if (!a?.title) return new Response("no record", { status: 400 });
-
-    const ids = await audienceUserIds(a);
-    if (!ids.length) return new Response(JSON.stringify({ sent: 0 }), { status: 200 });
-
-    const { data: subs } = await supabase
-      .from("push_subscription")
-      .select("*")
-      .in("user_id", ids);
-
-    const payload = JSON.stringify({
-      title: a.kind === "poll" ? `Poll: ${a.title}` : a.title,
-      body: a.body ?? "Open MOH OS to read it.",
-      url: "/index.html#alerts",
-    });
-
-    let sent = 0;
-    const dead: string[] = [];
-
-    await Promise.all(
-      (subs ?? []).map(async (s: any) => {
-        try {
-          await webpush.sendNotification(
-            { endpoint: s.endpoint, keys: { p256dh: s.p256dh, auth: s.auth } },
-            payload,
-          );
-          sent++;
-        } catch (err: any) {
-          // 404/410 = the browser threw the subscription away. Clean it up.
-          if (err?.statusCode === 404 || err?.statusCode === 410) dead.push(s.endpoint);
-          else console.error("push failed:", err?.statusCode, err?.body);
+  let sent = 0;
+  const jobs: Job[] = data.jobs;
+  for (let offset = 0; offset < jobs.length; offset += 10) {
+    await Promise.all(jobs.slice(offset, offset + 10).map(async job => {
+      let expired = false;
+      try {
+        await webpush.sendNotification({
+          endpoint: job.endpoint,
+          keys: { p256dh: job.p256dh, auth: job.auth },
+        }, JSON.stringify({ id: job.notification_id }), {
+          TTL: 86400,
+          timeout: 5000,
+          vapidDetails: {
+            subject: "https://vraxisjk36.github.io/crc-moh-os/",
+            publicKey: data.public_key,
+            privateKey: data.private_key,
+          },
+        });
+        sent++;
+      } catch (failure) {
+        const status = (failure as { statusCode?: number }).statusCode;
+        expired = status === 404 || status === 410;
+        if (!expired) {
+          console.error("Delivery will retry", status ?? "transport failure");
+          return;
         }
-      }),
-    );
-
-    if (dead.length)
-      await supabase.from("push_subscription").delete().in("endpoint", dead);
-
-    return new Response(JSON.stringify({ sent, cleaned: dead.length }), {
-      headers: { "Content-Type": "application/json" },
-    });
-  } catch (err) {
-    console.error(err);
-    return new Response(String(err), { status: 500 });
+      }
+      const result = await database.rpc("moh16_finish_web_push", {
+        p_id: job.id, p_attempt: job.attempts, p_expired: expired,
+      });
+      if (result.error) console.error("Could not acknowledge delivery", result.error.code);
+    }));
   }
+  return Response.json({ claimed: jobs.length, sent });
 });

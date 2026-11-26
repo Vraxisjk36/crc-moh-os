@@ -1,0 +1,9 @@
+exclude:
+  - supabase
+  - design/potch-inbox-test.sql
+  - design/PHASE18-LIVE-INTEGRATION.md
+  - "*.sql"
+  - "*.md"
+  - dashboard-extended.html
+  - leadership.html
+  - phase1.html

@@ -2,7 +2,7 @@
   "name": "CRC Ministry of Helps",
   "short_name": "MoH",
   "description": "CRC Ministry of Helps operational app for service, guide, academy, feedback, alerts and leadership.",
-  "start_url": "./",
+  "start_url": "./design/potch-master.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
@@ -36,5 +36,6 @@
   "categories": [
     "productivity",
     "utilities"
-  ]
+  ],
+  "id": "./"
 }

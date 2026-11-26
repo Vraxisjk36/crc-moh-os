@@ -1,0 +1,17 @@
+#app .moh-live-links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-block: .8rem;
+}
+
+#moh-live-inbox-tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: .5rem;
+  margin-block: .8rem;
+}
+
+#moh-live-inbox-status {
+  flex-basis: 100%;
+}

@@ -1,13 +1,30 @@
-/* CRC Potchefstroom live-data adapter.
-   Staging only: ?live=1. The approved 4 MB master and its demo mode remain intact.
-   Security decisions always remain in Supabase (RLS / RPC), never in this UI. */
+/* Supabase integration for the CRC Potchefstroom member site. */
 (function () {
   'use strict';
-  if (new URLSearchParams(location.search).get('live') !== '1') return;
   const CHURCH = 'debd20d7-ab61-490e-ab73-1d37b55cb389';
-  const URL = 'https://tkiwlptybfmaduulovbg.supabase.co';
+  const SUPABASE_URL = 'https://tkiwlptybfmaduulovbg.supabase.co';
+  const PUSH_KEY = 'BOUboBAZFV87A8QECijy-I9yyxP0wDboETm8j2dmp_QL1kdW1XlvOzSSN4C620PSrnpmCtSSfXEbpd_087YCtSg';
   let client, account, member, summary, configuration, course, units = [], attempts = [], active = false;
-  let busy = false;
+  let busy = false, pushWorker, installPrompt, inboxChannel, currentPage;
+  const appUrl = new URL('./potch-master.html', location.href);
+  let pendingInbox = location.hash === '#alerts';
+  const routes = {
+    home: 'Home', poll: 'Sunday availability', notifications: 'Notifications',
+    academy: 'Academy', guide: 'Serving guide', attendance: 'My attendance',
+    duties: 'Sunday duties', areas: 'Areas & rotations', calendar: 'Service calendar',
+    events: 'Ministry events', uniform: 'Uniforms', notices: 'Send announcement',
+    profile: 'My profile'
+  };
+  const rpc = async (name, args) => check(await client.rpc('moh16_' + name, args));
+  const churchRows = (name, columns) => client.from('moh16_' + name).select(columns).eq('church_id', CHURCH);
+  const formatDate = date => new Date(date.length === 10 ? date + 'T12:00:00+02:00' : date)
+    .toLocaleString('en-ZA', { timeZone: 'Africa/Johannesburg', dateStyle: 'medium' });
+  const canPublish = () => summary?.administrator || summary?.roles?.some(role =>
+    role.permissions?.includes('announcements.publish'));
+  const allowed = route => Object.hasOwn(routes, route) && (route !== 'notices' || canPublish());
+  const routeButtons = () => Object.entries(routes).filter(([route]) => allowed(route))
+    .map(([route, label]) => button(label, () => page(route), 'outline'));
+
   document.documentElement.dataset.mohLive = 'true';
   try { window.Date = NativeDemoDate; } catch (_) {}
   const byId = id => document.getElementById(id);
@@ -24,14 +41,16 @@
     let label = byId('moh-live-status');
     if (!label) { label = document.createElement('p'); label.id = 'moh-live-status'; byId('verify').replaceChildren(label); }
     label.textContent = text;
+    byId('verify').querySelector('#moh-sign-out')?.remove();
     if (allowSignOut) {
       const btn = document.createElement('button');
       btn.className = 'outline wide'; btn.textContent = 'Sign out';
-      btn.onclick = async () => { await client.auth.signOut(); account = null; active = false; auth('signin'); };
+      btn.id = 'moh-sign-out';
+      btn.onclick = signOut;
       byId('verify').append(btn);
     }
   };
-  const recoveryRedirect = () => location.origin + location.pathname + '?live=1&recovery=1';
+  const recoveryRedirect = () => appUrl.href + '?live=1&recovery=1';
   let recoveryFormShown = false;
   function showPasswordRecovery() {
     if (recoveryFormShown) return;
@@ -75,7 +94,7 @@
         proceed.type = 'button';
         proceed.className = 'primary wide';
         proceed.textContent = 'Continue';
-        proceed.onclick = () => location.replace(location.pathname + '?live=1');
+        proceed.onclick = () => location.replace(appUrl.href);
         byId('verify').append(proceed);
       } catch (err) {
         status.textContent = err.message || 'Could not update your password.';
@@ -88,48 +107,19 @@
     const words = n.split(' ');
     return { first: words.shift() || 'Member', last: words.join(' ') };
   };
-  const routePermissions = () => {
-    const grants = (summary.roles || []).flatMap(r => Array.isArray(r.permissions) ? r.permissions : []);
-    return new Set(grants);
-  };
-  const allowed = p => {
-    if (!active) return false;
-    const perm = routePermissions();
-    // Only workflows implemented against real tenant data are enabled here.
-    if (['home', 'academy', 'poll', 'profile', 'notifications'].includes(p)) return true;
-    if (p === 'reports' && perm.has('reports.read')) return false; // pending real reports UI
-    return false;
-  };
   function sanitizeDashboard() {
     const root = byId('home');
-    if (!root) return;
-    const upcoming = (summary.upcoming || [])[0];
-    const assignment = byId('assignment-area');
-    if (assignment) assignment.textContent = 'Awaiting verified leadership allocation';
-    const art = root.querySelector('.assignment-art');
-    if (art) {
-      const service = art.querySelector('span');
-      const time = art.querySelector('b');
-      if (service) service.textContent = upcoming?.code?.toUpperCase() || '—';
-      if (time) time.textContent = String(upcoming?.arrival || '—').slice(0, 5);
+    if (byId('moh-live-home')) return;
+    for (const child of root.children) child.hidden = true;
+    const next = summary.upcoming?.[0];
+    const welcome = elem('section', 'ra-panel');
+    welcome.append(elem('h2', '', 'Welcome, ' + name + '.'));
+    welcome.append(elem('p', 'muted', group === 'Unplaced' ? 'Contact a ministry leader for your group placement.' : 'Home group ' + group));
+    if (next) {
+      welcome.append(elem('p', '', next.label + ' · ' + formatDate(next.service_date) + ' · Arrive ' + next.arrival.slice(0, 5)));
     }
-    const history = root.querySelector('.history-summary');
-    if (history) {
-      history.querySelectorAll('b').forEach(el => el.textContent = '—');
-      const note = history.querySelector('.history-note');
-      if (note) note.textContent = 'Serving history awaits verified attendance records.';
-    }
-    const chart = byId('week-chart'), detail = byId('week-detail');
-    if (chart) chart.replaceChildren();
-    if (detail) detail.replaceChildren();
-    let status = byId('moh-live-banner');
-    if (!status) {
-      status = document.createElement('p');
-      status.id = 'moh-live-banner';
-      status.className = 'muted';
-      root.querySelector('.dash-date')?.append(status);
-    }
-    status.textContent = 'Connected to CRC Potchefstroom · Live account · Draft campus';
+    welcome.id = 'moh-live-home';
+    root.append(welcome);
   }
   async function loadCourses() {
     if (!member?.team_code) { course = null; units = []; attempts = []; return; }
@@ -215,83 +205,346 @@
       root.append(row);
     });
   }
-  const sunday = date => {
-    const d = date ? new Date(date + 'T12:00:00') : new Date();
-    d.setDate(d.getDate() + (7 - d.getDay()) % 7);
-    const year = d.getFullYear(), month = String(d.getMonth() + 1).padStart(2, '0'), day = String(d.getDate()).padStart(2, '0');
-    return year + '-' + month + '-' + day;
+  const localSunday = () => {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Africa/Johannesburg', year: 'numeric', month: '2-digit', day: '2-digit'
+    }).formatToParts(new Date());
+    const values = Object.fromEntries(parts.map(({ type, value }) => [type, value]));
+    const date = new Date(values.year + '-' + values.month + '-' + values.day + 'T12:00:00Z');
+    date.setUTCDate(date.getUTCDate() + (7 - date.getUTCDay()) % 7);
+    return date.toISOString().slice(0, 10);
   };
-  async function loadVote(date) {
-    const rows = check(await client.from('moh16_availability').select('service_code,choice,reason').eq('church_id', CHURCH).eq('user_id', account.id).eq('service_date', date));
-    const am = rows?.find(x => x.service_code === 'am')?.choice === 'available';
-    const pm = rows?.find(x => x.service_code === 'pm')?.choice === 'available';
-    state.vote = am && pm ? 'Both services' : am ? 'AM service' : pm ? 'PM service' : rows?.length ? 'Not serving' : null;
-    if (state.vote) document.querySelectorAll('#poll-form [name=choice]').forEach(x => { x.checked = x.value === state.vote; });
+
+  function moduleForm(root, fields, label, submit) {
+    const form = document.createElement('form');
+    const save = elem('button', 'primary wide', label);
+    save.type = 'submit';
+    const status = elem('p', 'muted');
+    status.setAttribute('role', 'status');
+    form.append(...fields, save, status);
+    form.onsubmit = async event => {
+      event.preventDefault();
+      save.disabled = true;
+      status.textContent = '';
+      try { status.textContent = await submit(form); }
+      catch (error) { status.textContent = error.message; }
+      finally { save.disabled = false; }
+    };
+    root.append(form);
+    return form;
   }
-  async function saveVote(e) {
-    e.preventDefault(); e.stopImmediatePropagation();
-    if (!active || busy) return;
-    const f = new FormData(e.target), choice = String(f.get('choice') || '');
-    const date = String(f.get('sunday') || sunday());
-    const reason = String(f.get('reason') || '').trim();
-    if (!['AM service', 'PM service', 'Both services', 'Not serving'].includes(choice)) return say('Choose your serving availability.');
-    if (choice === 'Not serving' && !reason) return say('Please provide a reason.');
-    if (new Date(date + 'T12:00:00').getDay() !== 0) return say('Select a Sunday.');
-    const services = (configuration.services || []).map(x => x.code);
-    const actions = ['am', 'pm'].filter(x => services.includes(x));
-    busy = true;
-    try {
-      for (const code of actions) {
-        const available = choice === 'Both services' || choice === (code === 'am' ? 'AM service' : 'PM service');
-        check(await client.rpc('moh16_submit_availability', {
-          p_church: CHURCH, p_service: code, p_date: date,
-          p_choice: available ? 'available' : 'not_serving',
-          p_reason: available ? '' : (reason || 'Serving the other Sunday service')
-        }));
+
+  async function renderPoll(root) {
+    const date = input('date', localSunday());
+    date.required = true;
+    const reason = document.createElement('textarea');
+    const options = (configuration.services || []).map(service => {
+      const choice = document.createElement('select');
+      choice.add(new Option('Leave unchanged', ''));
+      choice.add(new Option('Available', 'available'));
+      choice.add(new Option('Not serving', 'not_serving'));
+      return { service, choice };
+    });
+    const form = moduleForm(root, [field('Sunday', date),
+      ...options.map(({ service, choice }) => field(service.label, choice)),
+      field('Reason for not serving', reason)], 'Save availability', async () => {
+      if (new Date(date.value + 'T12:00:00Z').getUTCDay() !== 0) throw Error('Select a Sunday.');
+      const votes = options.filter(({ choice }) => choice.value).map(({ service, choice }) => ({
+        service: service.code,
+        choice: choice.value,
+        reason: choice.value === 'not_serving' ? reason.value.trim() : ''
+      }));
+      if (!votes.length || votes.some(vote => vote.choice === 'not_serving' && !vote.reason)) {
+        throw Error('Choose availability and give a reason for any service you cannot attend.');
       }
-      await loadVote(date);
-      say('Your availability has been saved to Supabase.');
-      page('home');
-      sanitizeDashboard();
-    } catch (err) { say('Availability not fully saved: ' + (err.message || 'Please retry')); }
-    finally { busy = false; }
+      await rpc('submit_sunday_availability', { p_church: CHURCH, p_date: date.value, p_votes: votes });
+      return 'Availability saved.';
+    });
+    async function loadVote() {
+      const requested = date.value;
+      const save = form.querySelector('button');
+      save.disabled = true;
+      try {
+        const rows = check(await churchRows('availability', 'service_code,choice,reason')
+          .eq('user_id', account.id).eq('service_date', requested));
+        if (date.value !== requested) return;
+        for (const { service, choice } of options) choice.value = rows.find(row => row.service_code === service.code)?.choice || '';
+        reason.value = rows.find(row => row.reason)?.reason || '';
+      } catch (error) { if (date.value === requested) form.lastElementChild.textContent = error.message; }
+      finally { if (date.value === requested) save.disabled = false; }
+    }
+    date.onchange = loadVote;
+    await loadVote();
+  }
+
+  function publishNotice(root) {
+    const title = input('text', '');
+    title.required = true;
+    title.maxLength = 200;
+    const body = document.createElement('textarea');
+    body.required = true;
+    body.maxLength = 4000;
+    const team = document.createElement('select');
+    team.add(new Option('Entire campus', ''));
+    for (const item of configuration.teams || []) team.add(new Option(item.label || item.code, item.code));
+    const groupSelect = document.createElement('select');
+    const setGroups = () => {
+      groupSelect.replaceChildren(new Option('All groups in selected audience', ''));
+      for (const item of configuration.groups || []) {
+        if (item.team_code === team.value) groupSelect.add(new Option(item.label || item.code, item.code));
+      }
+    };
+    team.onchange = setGroups;
+    setGroups();
+    moduleForm(root, [field('Title', title), field('Message', body),
+      field('Team', team), field('Group', groupSelect)], 'Send announcement', async form => {
+      if (!title.value.trim() || !body.value.trim()) throw Error('Enter a title and message.');
+      await rpc('publish_announcement', {
+        p_church: CHURCH, p_title: title.value.trim(), p_body: body.value.trim(),
+        p_team: team.value || null, p_group: groupSelect.value || null
+      });
+      form.reset();
+      setGroups();
+      return 'Announcement sent to the selected audience.';
+    });
+  }
+
+  function showRows(root, rows, render, empty) {
+    if (!rows.length) root.append(elem('p', 'muted', empty));
+    for (const row of rows) render(row);
+  }
+
+  async function renderModule(route, root) {
+    if (route === 'poll') return renderPoll(root);
+    if (route === 'notices') return publishNotice(root);
+    if (route === 'calendar') {
+      return showRows(root, summary.upcoming || [], service => line57(root, service.label,
+        formatDate(service.service_date) + ' · Starts ' + service.starts.slice(0, 5)), 'No services scheduled for the next week.');
+    }
+    if (route === 'attendance') {
+      const rows = check(await churchRows('attendance', 'service_date,service_code,status')
+        .eq('user_id', account.id).order('service_date', { ascending: false }).limit(52));
+      return showRows(root, rows, row => line57(root, formatDate(row.service_date),
+        row.service_code.toUpperCase() + ' · ' + row.status.replaceAll('_', ' ')), 'No attendance recorded yet.');
+    }
+    if (route === 'areas') {
+      const date = input('date', localSunday());
+      date.required = true;
+      const service = document.createElement('select');
+      for (const item of configuration.services || []) service.add(new Option(item.label, item.code));
+      const schedule = elem('div');
+      moduleForm(root, [field('Date', date), field('Service', service)], 'View areas', async () => {
+        const rows = await rpc('area_schedule', { p_church: CHURCH, p_service: service.value, p_date: date.value });
+        schedule.replaceChildren();
+        showRows(schedule, Array.isArray(rows) ? rows : rows?.assignments || [], row => line57(schedule,
+          row.area_label || row.area_name || row.area_code, row.group_label || row.group_code || ''),
+          'No published area assignments for this service.');
+        return '';
+      });
+      root.append(schedule);
+      return;
+    }
+    if (route === 'duties') {
+      const rows = check(await churchRows('duty_tasks', 'id,title,description,service_date,service_code,completed_at')
+        .gte('service_date', localSunday()).order('service_date').limit(50));
+      return showRows(root, rows, row => line57(root, row.title,
+        [formatDate(row.service_date), row.service_code.toUpperCase(), row.description,
+          row.completed_at ? 'Completed' : ''].filter(Boolean).join(' · ')), 'No upcoming duties are assigned.');
+    }
+    if (route === 'guide') {
+      const rows = check(await churchRows('guide_versions', 'code,title,content,version').eq('status', 'published')
+        .order('code').order('version', { ascending: false }));
+      const latest = rows.filter((row, index) => index === 0 || rows[index - 1].code !== row.code);
+      return showRows(root, latest, row => {
+        const details = document.createElement('details');
+        details.className = 'guide57';
+        details.append(elem('summary', '', row.title));
+        const sections = Array.isArray(row.content) ? row.content : row.content?.sections || [];
+        for (const section of sections) {
+          if (section.heading) details.append(elem('h3', '', section.heading));
+          if (section.text) details.append(elem('p', '', section.text));
+          for (const item of section.bullets || []) details.append(elem('p', '', '• ' + item));
+        }
+        root.append(details);
+      }, 'No serving guide has been published.');
+    }
+    if (route === 'events') {
+      const rows = check(await churchRows('event_sessions', 'id,title,starts_at,deadline,status')
+        .eq('status', 'published').gte('starts_at', new Date().toISOString()).order('starts_at').limit(30));
+      return showRows(root, rows, row => line57(root, row.title, formatDate(row.starts_at),
+        button('Respond', () => respondToEvent(row), 'outline')), 'No upcoming events are available.');
+    }
+    if (route === 'uniform') return renderUniforms(root);
+  }
+
+  function respondToEvent(row) {
+    const modal = openModal(row.title);
+    const choice = document.createElement('select');
+    choice.add(new Option('Available', 'available'));
+    choice.add(new Option('Decline', 'declined'));
+    const reason = document.createElement('textarea');
+    moduleForm(modal, [field('Response', choice), field('Reason', reason)], 'Save response', async () => {
+      await rpc('respond_event', {
+        p_church: CHURCH, p_session: row.id, p_choice: choice.value, p_arrival: null, p_reason: reason.value.trim()
+      });
+      return 'Response saved.';
+    });
+  }
+
+  async function renderUniforms(root) {
+    const rows = check(await churchRows('uniform_campaigns', 'id,title,closes_at,instructions,status').order('closes_at', { ascending: false }));
+    showRows(root, rows, row => line57(root, row.title,
+      [row.status, row.closes_at && formatDate(row.closes_at), row.instructions].filter(Boolean).join(' · ')),
+    'No uniform campaigns are available.');
+  }
+
+  function configureInstall() {
+    const footer = byId('welcome').querySelector('footer');
+    footer.textContent = 'CRC Potchefstroom · Ministry of Helps';
+    const control = button('Add to Home Screen', async () => {
+      if (installPrompt) {
+        await installPrompt.prompt();
+        installPrompt = null;
+        return;
+      }
+      openModal('Add to Home Screen').append(elem('p', '',
+        'On iPhone or iPad, use Safari’s Share menu and choose Add to Home Screen. On Android and desktop, look for Install app in your browser menu.'));
+    }, 'outline');
+    footer.append(control);
+    control.hidden = matchMedia('(display-mode: standalone)').matches || navigator.standalone === true;
+    window.addEventListener('beforeinstallprompt', event => { event.preventDefault(); installPrompt = event; });
+    window.addEventListener('appinstalled', () => { control.hidden = true; installPrompt = null; });
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('../sw.js').then(async () => {
+        pushWorker = await navigator.serviceWorker.ready;
+      }).catch(error => console.warn('App installation unavailable:', error.message));
+      navigator.serviceWorker.addEventListener('message', event => {
+        if (event.data?.type !== 'open-alerts') return;
+        pendingInbox = true;
+        if (active) page('notifications');
+      });
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) refreshInbox();
+    });
+    window.setInterval(() => { if (!document.hidden) refreshInbox(); }, 45000);
+  }
+
+  async function savePush(subscription, enabled) {
+    const keys = subscription.toJSON().keys;
+    await rpc('save_web_push', {
+      p_church: CHURCH, p_endpoint: subscription.endpoint,
+      p_p256dh: enabled ? keys.p256dh : null, p_auth: enabled ? keys.auth : null,
+    });
+  }
+
+  async function disablePush() {
+    const subscription = await pushWorker?.pushManager?.getSubscription();
+    if (!subscription) return;
+    await savePush(subscription, false);
+    await subscription.unsubscribe();
+  }
+
+  async function signOut() {
+    try {
+      await disablePush();
+      check(await client.auth.signOut({ scope: 'local' }));
+      location.replace(appUrl.href);
+    } catch (error) { say(error.message || 'Could not sign out. Please try again.'); }
+  }
+
+  async function subscribePush() {
+    if (!pushWorker?.pushManager || !('Notification' in window)) {
+      throw Error('Open the installed app on iPhone or iPad, or use a browser that supports push.');
+    }
+    if (await Notification.requestPermission() !== 'granted') {
+      throw Error('Allow notifications in your browser settings, then try again.');
+    }
+    let sub = await pushWorker.pushManager.getSubscription();
+    try {
+      sub ??= await pushWorker.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: PUSH_KEY });
+      await savePush(sub, true);
+    } catch (error) {
+      if (sub) await sub.unsubscribe();
+      throw error;
+    }
   }
 
   async function liveNotifications() {
     const root = root57('notifications');
-    strip57(root, 'MINISTRY ALERTS', 'Notifications', 'Messages assigned to your authenticated account');
+    strip57(root, 'MINISTRY ALERTS', 'Notifications', 'Your ministry inbox');
+    const tools = elem('div');
+    tools.id = 'moh-live-inbox-tools';
+    const status = elem('p', 'muted');
+    status.id = 'moh-live-inbox-status';
+    status.setAttribute('role', 'status');
+    const setting = button('Enable device notifications', async () => {
+      setting.disabled = true;
+      try {
+        if (await pushWorker?.pushManager?.getSubscription()) {
+          await disablePush();
+          setting.textContent = 'Enable device notifications';
+          status.textContent = 'Device notifications disabled.';
+        } else {
+          await subscribePush();
+          setting.textContent = 'Disable device notifications';
+          status.textContent = 'Device notifications enabled.';
+        }
+      } catch (err) { status.textContent = err.message; }
+      finally { setting.disabled = false; }
+    }, 'outline');
     const test = button('Send me a test alert', async () => {
       test.disabled = true;
       try {
-        const created = check(await client.rpc('moh16_create_potch_test_notification'));
-        say(created ? 'Test alert added to your inbox.' : 'You already created a test alert today.');
-        await liveNotifications();
-      } catch (err) {
-        say(err.message || 'Could not create a test alert');
-        test.disabled = false;
-      }
+        const created = await rpc('create_potch_test_notification');
+        status.textContent = created ? 'Test alert added to your inbox.' : 'You already sent a test alert today.';
+        await refreshInbox();
+      } catch (err) { status.textContent = err.message; }
+      finally { test.disabled = false; }
     }, 'outline');
-    root.append(test);
+    tools.append(setting, test, status);
+    const rows = elem('div');
+    rows.id = 'moh-live-inbox';
+    root.append(tools, rows);
     try {
-      const rows = check(await client.from('moh16_notifications')
-        .select('id,title,body,kind,created_at,read_at')
-        .eq('church_id', CHURCH).eq('user_id', account.id)
-        .order('created_at', { ascending: false }).limit(50)) || [];
-      if (!rows.length) {
-        root.append(elem('p', 'muted', 'No ministry notifications yet.'));
-        return;
-      }
-      rows.forEach(n => {
-        const mark = n.read_at ? null : button('Mark read', async () => {
-          try {
-            check(await client.rpc('moh16_read_notification', { p_church: CHURCH, p_id: n.id }));
-            await liveNotifications();
-          } catch (err) { say(err.message || 'Could not mark notification as read'); }
-        }, 'outline');
-        line57(root, n.title || 'Ministry update', (n.body || '') + ' · ' + new Date(n.created_at).toLocaleDateString('en-ZA') + (n.read_at ? ' · Read' : ' · Unread'), mark);
-      });
-    } catch (err) { root.append(elem('p', 'muted', 'Notifications could not be loaded: ' + err.message)); }
+      if (await pushWorker?.pushManager?.getSubscription()) setting.textContent = 'Disable device notifications';
+    } catch { /* The enable button will report unavailable push. */ }
+    await refreshInbox();
   }
+
+  let inboxGeneration = 0;
+  async function refreshInbox() {
+    if (!active) return;
+    const generation = ++inboxGeneration;
+    const list = byId('moh-live-inbox');
+    try {
+      const rows = check(await churchRows('notifications', 'id,title,body,created_at,read_at')
+        .eq('user_id', account.id).order('created_at', { ascending: false }).limit(50));
+      if (generation !== inboxGeneration) return;
+      const count = rows.filter(row => !row.read_at).length;
+      const badge = byId('moh-inbox-badge');
+      if (badge) {
+        badge.textContent = String(count);
+        badge.hidden = count === 0;
+      }
+      if (currentPage !== 'notifications' || !list?.isConnected) return;
+      list.replaceChildren();
+      if (!rows.length) list.append(elem('p', 'muted', 'No ministry notifications yet.'));
+      for (const row of rows) {
+        const mark = row.read_at ? null : button('Mark read', async () => {
+          try {
+            await rpc('read_notification', { p_church: CHURCH, p_id: row.id });
+            await refreshInbox();
+          } catch (err) { say(err.message); }
+        }, 'outline');
+        line57(list, row.title || 'Ministry update',
+          [row.body, formatDate(row.created_at), row.read_at ? 'Read' : 'Unread'].filter(Boolean).join(' · '), mark);
+      }
+    } catch (err) {
+      if (generation === inboxGeneration && currentPage === 'notifications' && list?.isConnected) list.textContent = err.message;
+    }
+  }
+
   function safeProfile() {
     const root = byId('profile');
     if (!root) return;
@@ -343,11 +596,7 @@
         try { check(await client.auth.resetPasswordForEmail(account.email, { redirectTo: recoveryRedirect() })); say('Password reset email requested.'); }
         catch (err) { say(err.message || 'Could not request reset'); }
       }, 'outline wide'));
-      modal.append(button('Sign out', async () => {
-        await client.auth.signOut();
-        active = false; account = null;
-        closeModal(); location.reload();
-      }, 'outline wide'));
+      modal.append(button('Sign out', signOut, 'outline wide'));
     };
     if (byId('show-achievement')) byId('show-achievement').onclick = () => page('academy');
   }
@@ -414,29 +663,68 @@
     selectRole.closest('label').hidden = true;
     if (window.demoControls) window.demoControls.hidden = true;
     active = true;
-    await Promise.all([loadCourses(), loadVote(sunday())]);
-    dashboard();
-    sanitizeDashboard();
     renderAcademy57 = liveAcademy;
-    const originalPage = page;
-    page = function (p) {
-      if (!allowed(p)) { say('This ministry workspace is not yet connected in live staging.'); return; }
-      originalPage(p);
-      if (p === 'home') sanitizeDashboard();
-      if (p === 'academy') liveAcademy();
-      if (p === 'notifications') liveNotifications();
-      if (p === 'profile') safeProfile();
-    };
-    const nav = document.querySelectorAll('#nav [data-page],.bottom-tabs [data-page]');
-    nav.forEach(b => { if (!allowed(b.dataset.page)) b.title = 'Live integration pending'; });
-    byId('poll-form').addEventListener('submit', saveVote, true);
-    byId('app').querySelectorAll('[data-home]').forEach(b => b.addEventListener('click', async e => {
-      e.preventDefault(); e.stopImmediatePropagation();
-      await client.auth.signOut(); active = false; account = null; screen('welcome');
-    }, true));
-    safeProfile();
-    say('Connected to your CRC Potchefstroom account.');
+    dashboard();
+    page = openLivePage;
+    if (typeof raContext !== 'undefined') raContext.hidden = true;
+    const top = byId('work-title').parentElement;
+    const nav = elem('nav', 'moh-live-links');
+    nav.setAttribute('aria-label', 'Member navigation');
+    nav.append(...routeButtons());
+    nav.append(button('Sign out', signOut, 'outline'));
+    top.after(nav);
+    byId('sidebar').hidden = true;
+    byId('open-nav').hidden = true;
+    const alert = top.querySelector('[data-page="notifications"]');
+    if (alert) {
+      alert.onclick = () => page('notifications');
+      const badge = elem('span');
+      badge.id = 'moh-inbox-badge';
+      badge.hidden = true;
+      alert.append(badge);
+    }
+    const tabs = byId('app').querySelector('.bottom-tabs');
+    if (tabs) tabs.hidden = true;
+    page(pendingInbox ? 'notifications' : 'home');
+    if (inboxChannel) await client.removeChannel(inboxChannel);
+    inboxChannel = client.channel('moh-inbox-' + user.id).on('postgres_changes', {
+      event: '*', schema: 'public', table: 'moh16_notifications', filter: 'user_id=eq.' + user.id
+    }, refreshInbox).subscribe(refreshInbox);
   }
+
+  function openLivePage(route) {
+    if (!active || !allowed(route)) return;
+    currentPage = route;
+    closeNav();
+    window.scrollTo(0, 0);
+    byId('work-title').textContent = routes[route];
+    const content = byId('home').parentElement;
+    for (const section of content.children) section.hidden = true;
+    if (['home', 'profile', 'academy', 'notifications'].includes(route)) {
+      byId(route).hidden = false;
+      if (route === 'home') sanitizeDashboard();
+      if (route === 'profile') { renderProfile(); safeProfile(); }
+      if (route === 'academy') {
+        root57('academy').append(elem('p', 'muted', 'Loading Academy…'));
+        loadCourses().then(() => { if (currentPage === 'academy') liveAcademy(); })
+          .catch(error => { if (currentPage === 'academy') root57('academy').textContent = error.message; });
+      }
+      if (route === 'notifications') liveNotifications();
+      return;
+    }
+    let section = byId('moh-live-module');
+    if (!section) {
+      section = elem('section', 'ra-panel');
+      section.id = 'moh-live-module';
+      content.append(section);
+    }
+    section.replaceChildren(elem('h2', '', routes[route]));
+    section.hidden = false;
+    const mount = elem('div');
+    section.append(mount);
+    renderModule(route, mount).catch(err => { mount.textContent = err.message; });
+  }
+
   async function submitCredentials(e) {
     e.preventDefault(); e.stopImmediatePropagation();
     if (!client || busy) return say('Connection is still loading.');
@@ -445,9 +733,12 @@
     try {
       if (mode === 'signup') {
         if (password !== f.elements.confirm.value) return say('Passwords do not match.');
-        const result = check(await client.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + location.pathname + '?live=1' } }));
+        const result = check(await client.auth.signUp({ email, password, options: { emailRedirectTo: location.origin + appUrl.href } }));
         if (result?.session) await enter(result.user);
-        else inform('Account created. Confirm your email, then sign in to choose your trainee group and open the Academy.', false);
+        else {
+          inform('Check your email for the confirmation link. Then sign in to select your trainee group.', false);
+          byId('verify').append(button('Return to sign-in', () => auth('signin'), 'outline wide'));
+        }
       } else {
         const result = check(await client.auth.signInWithPassword({ email, password }));
         await enter(result.user);
@@ -460,7 +751,31 @@
     if (started) return;
     started = true;
     const login = byId('login');
+    auth = function (nextMode) {
+      mode = nextMode;
+      screen('auth');
+      login.hidden = false;
+      byId('verify').hidden = true;
+      byId('auth-switch').hidden = false;
+      byId('confirm-label').hidden = mode !== 'signup';
+      login.elements.confirm.required = mode === 'signup';
+      login.elements.password.autocomplete = mode === 'signup' ? 'new-password' : 'current-password';
+      byId('forgot').hidden = mode !== 'signin';
+      byId('auth-title').textContent = mode === 'signup' ? 'Join the team.' : 'Welcome back.';
+      byId('auth-copy').textContent = mode === 'signup' ? 'Create your CRC Potchefstroom ministry account.' : 'Sign in to your CRC Potchefstroom ministry account.';
+      byId('auth-submit').textContent = mode === 'signup' ? 'Create account' : 'Sign in';
+      document.querySelectorAll('[data-mode]').forEach(control => control.setAttribute('aria-selected', String(control.dataset.mode === mode)));
+    };
+    document.querySelectorAll('[data-auth],[data-mode]').forEach(control => {
+      control.onclick = () => auth(control.dataset.auth || control.dataset.mode);
+    });
+    byId('auth').querySelector('[data-home]').onclick = () => screen('welcome');
+    byId('network-admin').hidden = true;
+    byId('network-lab').hidden = true;
+    byId('jump').removeAttribute('title');
+    configureInstall();
     login.elements.email.value = ''; login.elements.password.value = ''; login.elements.confirm.value = '';
+    login.onsubmit = null;
     login.addEventListener('submit', submitCredentials, true);
     byId('jump').onclick = () => auth('signin');
     byId('jump').textContent = 'Sign in ↗';
@@ -475,7 +790,7 @@
       let mod;
       try { mod = await import('https://esm.sh/@supabase/supabase-js@2.110.0'); }
       catch (_) { mod = await import('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.110.0/+esm'); }
-      client = mod.createClient(URL, "sb_publishable_k8PRKFpCTvh9qU5q4GOv2Q_coh9uu69", {
+      client = mod.createClient(SUPABASE_URL, "sb_publishable_k8PRKFpCTvh9qU5q4GOv2Q_coh9uu69", {
         auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
       });
       delete window.__MOH_PUBLISHABLE_KEY__;
@@ -495,7 +810,7 @@
           retry.type = 'button';
           retry.className = 'outline wide';
           retry.textContent = 'Return to sign-in';
-          retry.onclick = () => location.replace(location.pathname + '?live=1');
+          retry.onclick = () => location.replace(appUrl.href);
           byId('verify').append(retry);
         }
         return;
